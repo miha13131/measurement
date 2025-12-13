@@ -1,0 +1,141 @@
+﻿@page "/measurements"
+@using DeviceMeasurementsApp.Models
+@inject HttpClient Http
+@inject IJSRuntime JS
+
+<h3>Device Measurements</h3>
+
+@if (_items is null)
+{
+    <p>Loading CSV...</p>
+}
+else
+{
+    <div class="mb-3">
+        <label>Select device: </label>
+        <select @onchange="OnDeviceChanged">
+            <option value="all">All devices</option>
+            @foreach (var id in _items.Select(x => x.DeviceId).Distinct().OrderBy(x => x))
+            {
+                <option value="@id">@id</option>
+            }
+        </select>
+    </div>
+
+    <div style="height:420px">
+        <canvas id="tsChart"></canvas>
+    </div>
+
+    <table class="table mt-4">
+        <thead>
+            <tr><th>Device ID</th><th>Timestamp</th><th>Value</th></tr>
+        </thead>
+        <tbody>
+            @foreach (var m in _filtered)
+            {
+                <tr><td>@m.DeviceId</td><td>@m.Timestamp</td><td>@m.Value</td></tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<Measurement>? _items;
+    private List<Measurement> _filtered = new();
+    private string _deviceFilter = "all";
+    private IJSObjectReference? _chartModule;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var url = $"data.csv?ts={DateTime.UtcNow.Ticks}";
+        var csv = await Http.GetStringAsync(url);
+        _items = ParseCsv(csv);
+        ApplyFilter();
+    }
+
+
+
+
+    @inject IJSRuntime JS
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        _chartModule = await JS.InvokeAsync<IJSObjectReference>(
+            "import", "/chartInterop.js?ts=" + DateTime.UtcNow.Ticks);
+
+        await RenderChartAsync();
+    }
+
+    private async Task RenderChartAsync()
+    {
+        if (_chartModule is null) return;
+
+        var groups = _filtered
+            .GroupBy(m => m.DeviceId)
+            .OrderBy(g => g.Key)
+            .Select(g => new
+            {
+                label = $"Device {g.Key}",
+                points = g.OrderBy(p => p.Timestamp)
+                          .Select(p => new { x = p.Timestamp, y = p.Value })
+                          .ToList()
+            }).ToList();
+
+        await _chartModule.InvokeVoidAsync("renderTimeSeriesChart", "tsChart", groups);
+    }
+
+    private void ApplyFilter()
+    {
+        if (_items is null) return;
+
+        _filtered = (_deviceFilter == "all")
+            ? _items.OrderBy(m => m.Timestamp).ToList()
+            : _items.Where(m => m.DeviceId.ToString() == _deviceFilter)
+                    .OrderBy(m => m.Timestamp).ToList();
+        StateHasChanged();
+    }
+
+    private async Task OnDeviceChanged(ChangeEventArgs e)
+    {
+        _deviceFilter = e.Value?.ToString() ?? "all";
+        ApplyFilter();
+        await RenderChartAsync();
+    }
+
+    private static List<Measurement> ParseCsv(string csv)
+    {
+        var list = new List<Measurement>();
+        var lines = csv.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+        int start = 0;
+        var header = lines[0].Trim().Split(',');
+        if (header.Length >= 3 && header[0].Equals("DeviceId", StringComparison.OrdinalIgnoreCase))
+            start = 1;
+
+        for (int i = start; i < lines.Length; i++)
+        {
+            var line = lines[i].Trim();
+            if (string.IsNullOrWhiteSpace(line)) continue;
+
+            var cols = line.Split(',', StringSplitOptions.TrimEntries);
+            if (cols.Length < 3) continue;
+
+            if (!int.TryParse(cols[0], out var devId)) continue;
+            if (!DateTime.TryParse(cols[1], out var ts)) continue;
+
+            if (!double.TryParse(cols[2],
+                    System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var value))
+            {
+                if (!double.TryParse(cols[2], out value)) continue;
+            }
+
+            list.Add(new Measurement { DeviceId = devId, Timestamp = ts, Value = value });
+        }
+
+        return list;
+    }
+}
