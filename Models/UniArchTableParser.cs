@@ -11,15 +11,10 @@ namespace DeviceMeasurementsApp.Models
             int periodMs = 60000,
             int maxRows = 300)
         {
-            // Minute .arch rows contain 47 float32 values.
-            // First 2 values are service fields (marker + internal value),
-            // measurement payload starts from the 3rd float.
-            const int rawFloatsPerRow = 47;
-            const int serviceFloatsPerRow = 2;
-            const int floatsPerRow = rawFloatsPerRow - serviceFloatsPerRow;
-            const int rowBytes = rawFloatsPerRow * 4;
+            const int floatsPerRow = 47;
+            const int rowBytes = floatsPerRow * 4;
 
-            if (archBytes.Length < rowBytes)
+            if (archBytes.Length < 4 + rowBytes)
                 throw new ArgumentException("arch file too small");
 
             var table = new UniArchTable();
@@ -36,18 +31,19 @@ namespace DeviceMeasurementsApp.Models
             }
 
 
-            int totalRows = archBytes.Length / rowBytes;
+            int payload = archBytes.Length - 4;
+            int totalRows = payload / rowBytes;
             int rows = Math.Min(totalRows, maxRows);
 
             for (int r = 0; r < rows; r++)
             {
                 var row = new float[floatsPerRow];
-                int baseOffset = r * rowBytes;
+                int baseOffset = 4 + r * rowBytes;
 
                 for (int c = 0; c < floatsPerRow; c++)
                 {
                     uint be = BinaryPrimitives.ReadUInt32BigEndian(
-                        archBytes.AsSpan(baseOffset + (c + serviceFloatsPerRow) * 4, 4));
+                        archBytes.AsSpan(baseOffset + c * 4, 4));
                     row[c] = BitConverter.Int32BitsToSingle((int)be);
                 }
 
