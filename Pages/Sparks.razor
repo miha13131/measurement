@@ -1,7 +1,7 @@
 @page "/sparks"
 @inject HttpClient Http
-@inject IJSRuntime JS
 
+@using System.Globalization
 @using DeviceMeasurementsApp.Services
 @using DeviceMeasurementsApp.Models
 
@@ -14,42 +14,97 @@
     {
         @foreach (var r in recs)
         {
-            <button @onclick="() => SelectRec(r.Id)">
-                @r.Name
-            </button>
+            <button @onclick="() => SelectRec(r.Id)">@r.Name</button>
         }
     }
 </div>
 
 <p>@status</p>
 
-@if (table != null)
+@if (view != null)
 {
-    <div id="sparks"
-         style="width:100%; height:660px; border:1px solid #ccc; margin-top:10px; background:#fff;">
+    <div style="border:1px solid #ccc; padding:10px; background:#fff;">
+        <h4 style="margin:0 0 6px 0;">@view.Title</h4>
+
+        <div style="font-size:12px; color:#666; margin-bottom:10px;">
+            @view.From.ToString("dd-MMM-yyyy HH:mm") → @view.To.ToString("dd-MMM-yyyy HH:mm")
+        </div>
+
+        <div style="margin-bottom:14px;">
+            <div style="font-weight:600; font-size:13px; margin-bottom:6px;">Alerts</div>
+            <div style="position:relative; height:22px; background:#fafafa; border:1px solid #e2e2e2;">
+                @foreach (var seg in view.AlertSegments)
+                {
+                    <div style="position:absolute; top:3px; height:14px; border-radius:3px; background:#ef4444; left:@(seg.LeftPercent.ToString("0.###", CultureInfo.InvariantCulture))%; width:@(seg.WidthPercent.ToString("0.###", CultureInfo.InvariantCulture))%;"></div>
+                }
+            </div>
+        </div>
+
+        <div style="margin-bottom:14px;">
+            <div style="font-weight:600; font-size:13px; margin-bottom:6px;">Analog trends</div>
+
+            @foreach (var trend in view.Trends)
+            {
+                <div style="margin-bottom:10px;">
+                    <div style="font-size:12px; color:#374151; margin-bottom:4px;">@trend.Label</div>
+                    <svg viewBox="0 0 1000 80" preserveAspectRatio="none" style="width:100%; height:80px; border:1px solid #e5e7eb; background:#fbfdff;">
+                        <line x1="0" y1="40" x2="1000" y2="40" stroke="#eef2f7" stroke-width="1"></line>
+                        <polyline points="@trend.Points" fill="none" stroke="@trend.Color" stroke-width="2"></polyline>
+                    </svg>
+                </div>
+            }
+        </div>
+
+        <div>
+            <div style="font-weight:600; font-size:13px; margin-bottom:6px;">State tracks</div>
+
+            @foreach (var track in view.StateTracks)
+            {
+                <div style="display:grid; grid-template-columns: 170px 1fr; gap:8px; align-items:center; margin-bottom:8px;">
+                    <div style="font-size:12px; color:#374151;">@track.Label</div>
+                    <div style="position:relative; height:22px; background:#fafafa; border:1px solid #e2e2e2;">
+                        @foreach (var seg in track.Segments)
+                        {
+                            <div style="position:absolute; top:3px; height:14px; border-radius:3px; background:@track.Color; left:@(seg.LeftPercent.ToString("0.###", CultureInfo.InvariantCulture))%; width:@(seg.WidthPercent.ToString("0.###", CultureInfo.InvariantCulture))%;"></div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
     </div>
 }
 
 @code {
     private sealed record Rec(int Id, string Name);
+    private sealed record PercentSegment(double LeftPercent, double WidthPercent);
+    private sealed record SparkTrend(string Label, string Color, string Points);
+    private sealed record SparkStateTrack(string Label, string Color, List<PercentSegment> Segments);
+    private sealed record SparkView(
+        string Title,
+        DateTime From,
+        DateTime To,
+        List<PercentSegment> AlertSegments,
+        List<SparkTrend> Trends,
+        List<SparkStateTrack> StateTracks);
 
     private readonly List<Rec> recs =
     [
-        new(58,"EMI1"),
-        new(60,"EMI2"),
-        new(59,"EMI3"),
-        new(1,"MAIN")
+        new(58, "EMI1"),
+        new(60, "EMI2"),
+        new(59, "EMI3"),
+        new(1, "MAIN")
     ];
 
     private string status = "Waiting…";
-
     private CeaZipStore? store;
     private UniArchTable? table;
+    private SparkView? view;
 
     private async Task Load()
     {
         store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
         table = null;
+        view = null;
         status = "Loaded. Select object.";
     }
 
@@ -65,23 +120,23 @@
         var archId = store.GetArchIds(recId).First();
         var pack = store.GetBinPacks(recId, archId).First();
 
-        var bytes = store.Read(pack.Entry);
-
         table = UniArchTableParser.ParseMinuteTable(
-            bytes,
+            store.Read(pack.Entry),
             pack.TimeUtc.ToLocalTime(),
             periodMs: 60000,
             maxRows: 720);
 
-        status = "Rendering…";
+        BuildView();
+        status = view == null ? "No data to display." : $"Rendered {table.Rows.Count} points.";
 
-        await RenderSparks();
+        await Task.CompletedTask;
     }
 
-    private async Task RenderSparks()
+    private void BuildView()
     {
-        if (table == null || table.Rows.Count == 0)
+        if (table == null || table.Rows.Count == 0 || table.Time.Count < 2)
         {
+            view = null;
             return;
         }
 
@@ -103,58 +158,135 @@
             .Take(2)
             .ToList();
 
+        if (analogColumns.Count == 0)
+        {
+            analogColumns = columns.Take(2).ToList();
+        }
+
         var stateColumns = columns
-            .Where(c => c.Distinct <= 6 && c.Max - c.Min > 0.001)
+            .Where(c => c.Distinct <= 8 && c.Max - c.Min > 0.001)
             .OrderBy(c => c.Index)
-            .Take(4)
+            .Take(5)
             .ToList();
 
         if (stateColumns.Count == 0)
         {
-            stateColumns = columns
-                .OrderByDescending(c => c.Variance)
-                .Take(3)
-                .ToList();
+            stateColumns = columns.OrderByDescending(c => c.Variance).Take(3).ToList();
         }
 
-        var trends = analogColumns.Select(c => new
+        var alertReference = analogColumns.First();
+        var alertSegments = BuildAlertSegments(alertReference.Index);
+
+        var trendColors = new[] { "#4f7edb", "#2ba297", "#d07a36" };
+        var trends = analogColumns
+            .Select((c, i) => new SparkTrend(c.Label, trendColors[i % trendColors.Length], BuildPolylinePoints(c.Index, c.Min, c.Max)))
+            .ToList();
+
+        var stateTracks = stateColumns
+            .Select((c, i) => new SparkStateTrack(c.Label, StateColor(i), BuildStateSegments(c.Index, c.Min, c.Max)))
+            .ToList();
+
+        view = new SparkView(
+            Title: $"Sparks • {table.Time.First():dd-MMM-yyyy HH:mm} - {table.Time.Last():HH:mm}",
+            From: table.Time.First(),
+            To: table.Time.Last(),
+            AlertSegments: alertSegments,
+            Trends: trends,
+            StateTracks: stateTracks);
+    }
+
+    private string BuildPolylinePoints(int column, double min, double max)
+    {
+        if (table == null || table.Rows.Count == 0)
         {
-            label = c.Label,
-            points = table.Time.Zip(table.Rows, (t, r) => new
+            return string.Empty;
+        }
+
+        double span = Math.Max(0.000001, max - min);
+        int n = table.Rows.Count;
+        var points = new List<string>(n);
+
+        for (int i = 0; i < n; i++)
+        {
+            double x = n <= 1 ? 0 : i * 1000d / (n - 1);
+            double value = table.Rows[i][column];
+            double normalized = (value - min) / span;
+            double y = 76 - (normalized * 72d);
+
+            points.Add($"{x.ToString("0.###", CultureInfo.InvariantCulture)},{y.ToString("0.###", CultureInfo.InvariantCulture)}");
+        }
+
+        return string.Join(" ", points);
+    }
+
+    private List<PercentSegment> BuildStateSegments(int column, double min, double max)
+    {
+        if (table == null || table.Rows.Count == 0)
+        {
+            return [];
+        }
+
+        double threshold = min + (max - min) * 0.5;
+        return BuildSegmentsByPredicate(i => table.Rows[i][column] >= threshold);
+    }
+
+    private List<PercentSegment> BuildAlertSegments(int column)
+    {
+        if (table == null || table.Rows.Count == 0)
+        {
+            return [];
+        }
+
+        var values = table.Rows.Select(r => (double)r[column]).OrderBy(v => v).ToArray();
+        int idx = (int)(values.Length * 0.85);
+        idx = Math.Clamp(idx, 0, values.Length - 1);
+        var threshold = values[idx];
+
+        return BuildSegmentsByPredicate(i => table.Rows[i][column] >= threshold);
+    }
+
+    private List<PercentSegment> BuildSegmentsByPredicate(Func<int, bool> isOn)
+    {
+        if (table == null || table.Rows.Count == 0)
+        {
+            return [];
+        }
+
+        int n = table.Rows.Count;
+        var raw = new List<(int Start, int End)>();
+        bool inSegment = false;
+        int start = 0;
+
+        for (int i = 0; i < n; i++)
+        {
+            if (isOn(i) && !inSegment)
             {
-                t,
-                v = (double)r[c.Index]
-            }).ToArray()
-        }).ToArray();
+                inSegment = true;
+                start = i;
+            }
+            else if (!isOn(i) && inSegment)
+            {
+                inSegment = false;
+                raw.Add((start, i));
+            }
+        }
 
-        var states = stateColumns.Select((c, idx) => new
+        if (inSegment)
         {
-            label = c.Label,
-            color = StateColor(idx),
-            segments = BuildSegments(c.Index, c.Min, c.Max)
-        }).ToArray();
+            raw.Add((start, n - 1));
+        }
 
-        var referenceTrend = analogColumns.FirstOrDefault();
-        var alerts = referenceTrend == null
-            ? []
-            : BuildAlertSegments(referenceTrend.Index);
+        var result = new List<PercentSegment>(raw.Count);
 
-        var model = new
+        foreach (var (segStart, segEnd) in raw)
         {
-            title = $"Sparks • {table.Time.First():dd-MMM-yyyy HH:mm} - {table.Time.Last():HH:mm}",
-            from = table.Time.First(),
-            to = table.Time.Last(),
-            trends,
-            states,
-            alerts
-        };
+            double left = segStart * 100d / Math.Max(1, n - 1);
+            double right = segEnd * 100d / Math.Max(1, n - 1);
+            double width = Math.Max(0.35, right - left);
+            result.Add(new PercentSegment(left, width));
+        }
 
-        await JS.InvokeVoidAsync(
-            "sparkInterop.renderSparks",
-            "sparks",
-            model);
-
-        status = $"Rendered {table.Rows.Count} points.";
+        return result;
     }
 
     private double CalculateVariance(int column)
@@ -169,89 +301,13 @@
         return values.Select(v => Math.Pow(v - avg, 2)).Average();
     }
 
-    private object[] BuildSegments(int column, double min, double max)
-    {
-        if (table == null || table.Rows.Count == 0)
-        {
-            return [];
-        }
-
-        double threshold = min + (max - min) * 0.5;
-
-        var segments = new List<object>();
-        bool inSegment = false;
-        DateTime start = table.Time[0];
-
-        for (int i = 0; i < table.Rows.Count; i++)
-        {
-            bool isOn = table.Rows[i][column] >= threshold;
-
-            if (isOn && !inSegment)
-            {
-                inSegment = true;
-                start = table.Time[i];
-            }
-
-            if (!isOn && inSegment)
-            {
-                inSegment = false;
-                segments.Add(new { from = start, to = table.Time[i] });
-            }
-        }
-
-        if (inSegment)
-        {
-            segments.Add(new { from = start, to = table.Time.Last() });
-        }
-
-        return segments.ToArray();
-    }
-
-    private object[] BuildAlertSegments(int column)
-    {
-        if (table == null || table.Rows.Count == 0)
-        {
-            return [];
-        }
-
-        var values = table.Rows.Select(r => (double)r[column]).OrderBy(v => v).ToArray();
-        var alertThreshold = values[(int)(values.Length * 0.85)];
-
-        var segments = new List<object>();
-        bool inSegment = false;
-        DateTime start = table.Time[0];
-
-        for (int i = 0; i < table.Rows.Count; i++)
-        {
-            bool isAlert = table.Rows[i][column] >= alertThreshold;
-
-            if (isAlert && !inSegment)
-            {
-                inSegment = true;
-                start = table.Time[i];
-            }
-
-            if (!isAlert && inSegment)
-            {
-                inSegment = false;
-                segments.Add(new { from = start, to = table.Time[i] });
-            }
-        }
-
-        if (inSegment)
-        {
-            segments.Add(new { from = start, to = table.Time.Last() });
-        }
-
-        return segments.ToArray();
-    }
-
     private static string StateColor(int index) =>
         index switch
         {
             0 => "#2ca25f",
             1 => "#3182bd",
             2 => "#f16913",
-            _ => "#756bb1"
+            3 => "#756bb1",
+            _ => "#0ea5a4"
         };
 }
