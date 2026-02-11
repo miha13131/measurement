@@ -115,7 +115,7 @@
 
         // ВОТ ЭТА СТРОКА КЛЮЧЕВАЯ
         table.Columns.Clear();
-        table.Columns.AddRange(columns);
+        table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
 
 
         selectedColumn = 1;
