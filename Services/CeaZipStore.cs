@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Buffers.Binary;
 using System.Threading.Tasks;
 
 namespace DeviceMeasurementsApp.Services
@@ -61,13 +62,40 @@ namespace DeviceMeasurementsApp.Services
 
             return list.OrderBy(x => x.TimeUtc).ToList();
         }
-        public string ReadArchDefXml()
+        public string ReadArchDefXml(int recId, byte archId)
         {
             using var z = Open();
 
-            var entry = z.Entries.First(e =>
-                e.FullName.StartsWith("UNI/ArchDefs/") &&
+            var headerEntry = z.GetEntry($"UNI/{recId}/{archId}/header.bin");
+            if (headerEntry == null)
+                throw new InvalidOperationException($"header.bin not found for rec={recId}, arch={archId}");
+
+            byte[] header;
+            using (var hs = headerEntry.Open())
+            using (var hms = new MemoryStream())
+            {
+                hs.CopyTo(hms);
+                header = hms.ToArray();
+            }
+
+            if (header.Length < 24)
+                throw new InvalidOperationException("header.bin is too small");
+
+            // Known UNI header layout: 4-byte little-endian arch-def id at offset 20.
+            int archDefId = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(20, 4));
+            var archDefPrefix = $"UNI/ArchDefs/{archDefId:X8}-";
+
+            var entry = z.Entries.FirstOrDefault(e =>
+                e.FullName.StartsWith(archDefPrefix) &&
                 e.FullName.EndsWith(".uad"));
+
+            if (entry == null)
+            {
+                // Fallback for non-standard archives.
+                entry = z.Entries.First(e =>
+                    e.FullName.StartsWith("UNI/ArchDefs/") &&
+                    e.FullName.EndsWith(".uad"));
+            }
 
             using var s = entry.Open();
             using var sr = new StreamReader(s);

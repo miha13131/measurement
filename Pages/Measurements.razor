@@ -103,7 +103,7 @@
 
         var bytes = store.Read(pack.Entry);
 
-        var typeXml = store.ReadArchDefXml();
+        var typeXml = store.ReadArchDefXml(recId, archId);
         var columns = ArchDefParser.ParseColumns(typeXml);
 
         table = UniArchTableParser.ParseMinuteTable(
