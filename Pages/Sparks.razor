@@ -1,64 +1,61 @@
-@page "/sparks"
+﻿@page "/sparks"
 @inject HttpClient Http
 @inject IJSRuntime JS
 
 @using DeviceMeasurementsApp.Services
 @using DeviceMeasurementsApp.Models
 
-<h3>SkySpark-like Sparks</h3>
+<h3>Sparks</h3>
 
-<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-    <button @onclick="Load">Load SMY134aEMIx.cea</button>
-
-    @if (store != null)
-    {
-        @foreach (var r in recs)
-        {
-            <button @onclick="() => SelectRec(r.Id)">
-                @r.Name
-            </button>
-        }
-    }
-</div>
-
+<button @onclick="Load">Load SMY134aEMIx.cea</button>
 <p>@status</p>
+
+@if (store != null)
+{
+    <h4>OBJECT</h4>
+    @foreach (var r in recs)
+    {
+        <button style="margin-right:6px;" @onclick="() => SelectRec(r.Id)">
+            @r.Name
+        </button>
+    }
+}
 
 @if (table != null)
 {
+    <h4>Analog tracks (columns 3–5)</h4>
+
     <div id="sparks"
-         style="width:100%; height:660px; border:1px solid #ccc; margin-top:10px; background:#fff;">
+         style="width:100%; height:520px; border:1px solid #ccc; margin-top:10px;">
     </div>
 }
 
 @code {
-    private sealed record Rec(int Id, string Name);
+    record Rec(int Id, string Name);
 
-    private readonly List<Rec> recs =
-    [
+    List<Rec> recs = new()
+    {
         new(58,"EMI1"),
         new(60,"EMI2"),
         new(59,"EMI3"),
         new(1,"MAIN")
-    ];
+    };
 
-    private string status = "Waiting…";
+    string status = "Waiting…";
 
-    private CeaZipStore? store;
-    private UniArchTable? table;
+    CeaZipStore? store;
+    UniArchTable? table;
 
-    private async Task Load()
+    async Task Load()
     {
         store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
         table = null;
         status = "Loaded. Select object.";
     }
 
-    private async Task SelectRec(int recId)
+    async Task SelectRec(int recId)
     {
-        if (store == null)
-        {
-            return;
-        }
+        if (store == null) return;
 
         status = $"Loading data for recId={recId}…";
 
@@ -71,187 +68,42 @@
             bytes,
             pack.TimeUtc.ToLocalTime(),
             periodMs: 60000,
-            maxRows: 720);
+            maxRows: 500);
 
         status = "Rendering…";
 
         await RenderSparks();
     }
 
-    private async Task RenderSparks()
+    async Task RenderSparks()
     {
-        if (table == null || table.Rows.Count == 0)
+        if (table == null) return;
+
+        // 🔒 строго колонки 3–5
+        int[] cols = { 3, 4, 5 };
+
+        var tracks = cols.Select(c => new
         {
-            return;
-        }
-
-        var columns = Enumerable.Range(0, table.Columns.Count)
-            .Select(c => new
-            {
-                Index = c,
-                Label = table.Columns[c].Name,
-                Min = table.Rows.Min(r => (double)r[c]),
-                Max = table.Rows.Max(r => (double)r[c]),
-                Distinct = table.Rows.Select(r => Math.Round((double)r[c], 2)).Distinct().Count(),
-                Variance = CalculateVariance(c)
-            })
-            .ToList();
-
-        var analogColumns = columns
-            .Where(c => c.Max - c.Min > 0.01)
-            .OrderByDescending(c => c.Variance)
-            .Take(2)
-            .ToList();
-
-        var stateColumns = columns
-            .Where(c => c.Distinct <= 6 && c.Max - c.Min > 0.001)
-            .OrderBy(c => c.Index)
-            .Take(4)
-            .ToList();
-
-        if (stateColumns.Count == 0)
-        {
-            stateColumns = columns
-                .OrderByDescending(c => c.Variance)
-                .Take(3)
-                .ToList();
-        }
-
-        var trends = analogColumns.Select(c => new
-        {
-            label = c.Label,
-            points = table.Time.Zip(table.Rows, (t, r) => new
-            {
-                t,
-                v = (double)r[c.Index]
-            }).ToArray()
+            type = "line",
+            label = table.Columns[c],
+            points = table.Time.Zip(
+                table.Rows,
+                (t, r) => new
+                {
+                    t = t,              // DateTime → JS Date
+                    v = (double)r[c]
+                }).ToArray()
         }).ToArray();
-
-        var states = stateColumns.Select((c, idx) => new
-        {
-            label = c.Label,
-            color = StateColor(idx),
-            segments = BuildSegments(c.Index, c.Min, c.Max)
-        }).ToArray();
-
-        var referenceTrend = analogColumns.FirstOrDefault();
-        var alerts = referenceTrend == null
-            ? []
-            : BuildAlertSegments(referenceTrend.Index);
 
         var model = new
         {
-            title = $"Sparks • {table.Time.First():dd-MMM-yyyy HH:mm} - {table.Time.Last():HH:mm}",
-            from = table.Time.First(),
-            to = table.Time.Last(),
-            trends,
-            states,
-            alerts
+            tracks = tracks
         };
 
         await JS.InvokeVoidAsync(
             "sparkInterop.renderSparks",
             "sparks",
-            model);
-
-        status = $"Rendered {table.Rows.Count} points.";
+            model
+        );
     }
-
-    private double CalculateVariance(int column)
-    {
-        if (table == null || table.Rows.Count == 0)
-        {
-            return 0;
-        }
-
-        var values = table.Rows.Select(r => (double)r[column]).ToArray();
-        var avg = values.Average();
-        return values.Select(v => Math.Pow(v - avg, 2)).Average();
-    }
-
-    private object[] BuildSegments(int column, double min, double max)
-    {
-        if (table == null || table.Rows.Count == 0)
-        {
-            return [];
-        }
-
-        double threshold = min + (max - min) * 0.5;
-
-        var segments = new List<object>();
-        bool inSegment = false;
-        DateTime start = table.Time[0];
-
-        for (int i = 0; i < table.Rows.Count; i++)
-        {
-            bool isOn = table.Rows[i][column] >= threshold;
-
-            if (isOn && !inSegment)
-            {
-                inSegment = true;
-                start = table.Time[i];
-            }
-
-            if (!isOn && inSegment)
-            {
-                inSegment = false;
-                segments.Add(new { from = start, to = table.Time[i] });
-            }
-        }
-
-        if (inSegment)
-        {
-            segments.Add(new { from = start, to = table.Time.Last() });
-        }
-
-        return segments.ToArray();
-    }
-
-    private object[] BuildAlertSegments(int column)
-    {
-        if (table == null || table.Rows.Count == 0)
-        {
-            return [];
-        }
-
-        var values = table.Rows.Select(r => (double)r[column]).OrderBy(v => v).ToArray();
-        var alertThreshold = values[(int)(values.Length * 0.85)];
-
-        var segments = new List<object>();
-        bool inSegment = false;
-        DateTime start = table.Time[0];
-
-        for (int i = 0; i < table.Rows.Count; i++)
-        {
-            bool isAlert = table.Rows[i][column] >= alertThreshold;
-
-            if (isAlert && !inSegment)
-            {
-                inSegment = true;
-                start = table.Time[i];
-            }
-
-            if (!isAlert && inSegment)
-            {
-                inSegment = false;
-                segments.Add(new { from = start, to = table.Time[i] });
-            }
-        }
-
-        if (inSegment)
-        {
-            segments.Add(new { from = start, to = table.Time.Last() });
-        }
-
-        return segments.ToArray();
-    }
-
-    private static string StateColor(int index) =>
-        index switch
-        {
-            0 => "#2ca25f",
-            1 => "#3182bd",
-            2 => "#f16913",
-            _ => "#756bb1"
-        };
 }
