@@ -1,0 +1,109 @@
+﻿@page "/sparks"
+@inject HttpClient Http
+@inject IJSRuntime JS
+
+@using DeviceMeasurementsApp.Services
+@using DeviceMeasurementsApp.Models
+
+<h3>Sparks</h3>
+
+<button @onclick="Load">Load SMY134aEMIx.cea</button>
+<p>@status</p>
+
+@if (store != null)
+{
+    <h4>OBJECT</h4>
+    @foreach (var r in recs)
+    {
+        <button style="margin-right:6px;" @onclick="() => SelectRec(r.Id)">
+            @r.Name
+        </button>
+    }
+}
+
+@if (table != null)
+{
+    <h4>Analog tracks (columns 3–5)</h4>
+
+    <div id="sparks"
+         style="width:100%; height:520px; border:1px solid #ccc; margin-top:10px;">
+    </div>
+}
+
+@code {
+    record Rec(int Id, string Name);
+
+    List<Rec> recs = new()
+    {
+        new(58,"EMI1"),
+        new(60,"EMI2"),
+        new(59,"EMI3"),
+        new(1,"MAIN")
+    };
+
+    string status = "Waiting…";
+
+    CeaZipStore? store;
+    UniArchTable? table;
+
+    async Task Load()
+    {
+        store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+        table = null;
+        status = "Loaded. Select object.";
+    }
+
+    async Task SelectRec(int recId)
+    {
+        if (store == null) return;
+
+        status = $"Loading data for recId={recId}…";
+
+        var archId = store.GetArchIds(recId).First();
+        var pack = store.GetBinPacks(recId, archId).First();
+
+        var bytes = store.Read(pack.Entry);
+
+        table = UniArchTableParser.ParseMinuteTable(
+            bytes,
+            pack.TimeUtc.ToLocalTime(),
+            periodMs: 60000,
+            maxRows: 500);
+
+        status = "Rendering…";
+
+        await RenderSparks();
+    }
+
+    async Task RenderSparks()
+    {
+        if (table == null) return;
+
+        // 🔒 строго колонки 3–5
+        int[] cols = { 3, 4, 5 };
+
+        var tracks = cols.Select(c => new
+        {
+            type = "line",
+            label = table.Columns[c],
+            points = table.Time.Zip(
+                table.Rows,
+                (t, r) => new
+                {
+                    t = t,              // DateTime → JS Date
+                    v = (double)r[c]
+                }).ToArray()
+        }).ToArray();
+
+        var model = new
+        {
+            tracks = tracks
+        };
+
+        await JS.InvokeVoidAsync(
+            "sparkInterop.renderSparks",
+            "sparks",
+            model
+        );
+    }
+}

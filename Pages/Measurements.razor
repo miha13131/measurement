@@ -1,141 +1,153 @@
 ﻿@page "/measurements"
-@using DeviceMeasurementsApp.Models
 @inject HttpClient Http
 @inject IJSRuntime JS
+@using DeviceMeasurementsApp.Services
+@using DeviceMeasurementsApp.Models
 
-<h3>Device Measurements</h3>
+<h3>Measurements</h3>
 
-@if (_items is null)
+<button @onclick="Load">Load SMY134aEMIx.cea</button>
+<p>@status</p>
+
+@if (store != null)
 {
-    <p>Loading CSV...</p>
+    <h4>OBJECT</h4>
+
+    @foreach (var r in recs)
+    {
+        <button style="margin-right:6px;" @onclick="() => SelectRec(r.Id)">
+            @r.Name
+        </button>
+    }
 }
-else
+
+@if (table != null)
 {
-    <div class="mb-3">
-        <label>Select device: </label>
-        <select @onchange="OnDeviceChanged">
-            <option value="all">All devices</option>
-            @foreach (var id in _items.Select(x => x.DeviceId).Distinct().OrderBy(x => x))
-            {
-                <option value="@id">@id</option>
-            }
-        </select>
+    <h4>Table</h4>
+
+    <div style="overflow:auto; max-height:300px; border:1px solid #ddd;">
+        <table class="table table-sm">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    @foreach (var c in table.Columns)
+                    {
+                        <th>@c.DisplayName</th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @for (int i = 0; i < table.Rows.Count; i++)
+                {
+                    <tr>
+                        <td>@table.Time[i].ToString("HH:mm")</td>
+                        @for (int c = 0; c < Math.Min(table.Columns.Count, table.Rows[i].Length); c++)
+                        {
+                            <td>@table.Rows[i][c].ToString("0.###")</td>
+                        }
+
+                    </tr>
+                }
+            </tbody>
+        </table>
     </div>
 
-    <div style="height:420px">
-        <canvas id="tsChart"></canvas>
-    </div>
+    <h4>Chart</h4>
 
-    <table class="table mt-4">
-        <thead>
-            <tr><th>Device ID</th><th>Timestamp</th><th>Value</th></tr>
-        </thead>
-        <tbody>
-            @foreach (var m in _filtered)
-            {
-                <tr><td>@m.DeviceId</td><td>@m.Timestamp</td><td>@m.Value</td></tr>
-            }
-        </tbody>
-    </table>
+    <label>Column:</label>
+    <select @onchange="OnColumnChanged">
+        @for (int i = 0; i < table.Columns.Count; i++)
+        {
+            <option value="@i" selected="@(i == selectedColumn)">
+                @table.Columns[i].DisplayName
+            </option>
+        }
+    </select>
+
+    <div style="height:400px; margin-top:10px;">
+        <canvas id="chartCanvas"></canvas>
+    </div>
 }
 
 @code {
-    private List<Measurement>? _items;
-    private List<Measurement> _filtered = new();
-    private string _deviceFilter = "all";
-    private IJSObjectReference? _chartModule;
+    record Rec(int Id, string Name);
 
-    protected override async Task OnInitializedAsync()
+    List<Rec> recs = new()
     {
-        var url = $"data.csv?ts={DateTime.UtcNow.Ticks}";
-        var csv = await Http.GetStringAsync(url);
-        _items = ParseCsv(csv);
-        ApplyFilter();
+        new(58, "EMI1"),
+        new(60, "EMI2"),
+        new(59, "EMI3"),
+        new(1,  "MAIN")
+    };
+
+    string status = "Waiting…";
+
+    CeaZipStore? store;
+    UniArchTable? table;
+
+    int selectedColumn = 1;
+
+    async Task Load()
+    {
+        store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+        table = null;
+        status = "Loaded. Select an object.";
     }
 
-
-
-
-    @inject IJSRuntime JS
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    async Task SelectRec(int recId)
     {
-        if (!firstRender) return;
+        if (store == null) return;
 
-        _chartModule = await JS.InvokeAsync<IJSObjectReference>(
-            "import", "/chartInterop.js?ts=" + DateTime.UtcNow.Ticks);
+        var archId = store.GetArchIds(recId).First();
+        var pack = store.GetBinPacks(recId, archId).First();
 
-        await RenderChartAsync();
+        var bytes = store.Read(pack.Entry);
+
+        var typeXml = store.ReadArchDefXml();
+        var columns = ArchDefParser.ParseColumns(typeXml);
+
+        table = UniArchTableParser.ParseMinuteTable(
+            bytes,
+            pack.TimeUtc.ToLocalTime(),
+            periodMs: 60000,
+            maxRows: 500
+        );
+
+        // ВОТ ЭТА СТРОКА КЛЮЧЕВАЯ
+        table.Columns.Clear();
+        table.Columns.AddRange(columns);
+
+
+        selectedColumn = 1;
+
+        status = $"Loaded {pack.TimeUtc:O}";
+        await DrawChart();
     }
 
-    private async Task RenderChartAsync()
+    async Task OnColumnChanged(ChangeEventArgs e)
     {
-        if (_chartModule is null) return;
+        selectedColumn = int.Parse(e.Value!.ToString()!);
+        await DrawChart();
+    }
 
-        var groups = _filtered
-            .GroupBy(m => m.DeviceId)
-            .OrderBy(g => g.Key)
-            .Select(g => new
+    async Task DrawChart()
+    {
+        if (table == null) return;
+
+        var points = table.Time
+            .Zip(table.Rows, (t, r) => new
             {
-                label = $"Device {g.Key}",
-                points = g.OrderBy(p => p.Timestamp)
-                          .Select(p => new { x = p.Timestamp, y = p.Value })
-                          .ToList()
-            }).ToList();
+                x = t,                      // DateTime напрямую
+                y = (double)r[selectedColumn]
+            })
+            .ToArray();
 
-        await _chartModule.InvokeVoidAsync("renderTimeSeriesChart", "tsChart", groups);
+        await JS.InvokeVoidAsync(
+            "chartInterop.renderTimeSeriesChart",
+            "chartCanvas",
+            points,
+            table.Columns[selectedColumn].DisplayName
+        );
     }
 
-    private void ApplyFilter()
-    {
-        if (_items is null) return;
-
-        _filtered = (_deviceFilter == "all")
-            ? _items.OrderBy(m => m.Timestamp).ToList()
-            : _items.Where(m => m.DeviceId.ToString() == _deviceFilter)
-                    .OrderBy(m => m.Timestamp).ToList();
-        StateHasChanged();
-    }
-
-    private async Task OnDeviceChanged(ChangeEventArgs e)
-    {
-        _deviceFilter = e.Value?.ToString() ?? "all";
-        ApplyFilter();
-        await RenderChartAsync();
-    }
-
-    private static List<Measurement> ParseCsv(string csv)
-    {
-        var list = new List<Measurement>();
-        var lines = csv.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-
-        int start = 0;
-        var header = lines[0].Trim().Split(',');
-        if (header.Length >= 3 && header[0].Equals("DeviceId", StringComparison.OrdinalIgnoreCase))
-            start = 1;
-
-        for (int i = start; i < lines.Length; i++)
-        {
-            var line = lines[i].Trim();
-            if (string.IsNullOrWhiteSpace(line)) continue;
-
-            var cols = line.Split(',', StringSplitOptions.TrimEntries);
-            if (cols.Length < 3) continue;
-
-            if (!int.TryParse(cols[0], out var devId)) continue;
-            if (!DateTime.TryParse(cols[1], out var ts)) continue;
-
-            if (!double.TryParse(cols[2],
-                    System.Globalization.NumberStyles.Any,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out var value))
-            {
-                if (!double.TryParse(cols[2], out value)) continue;
-            }
-
-            list.Add(new Measurement { DeviceId = devId, Timestamp = ts, Value = value });
-        }
-
-        return list;
-    }
 }
