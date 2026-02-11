@@ -103,7 +103,7 @@
 
         var bytes = store.Read(pack.Entry);
 
-        var typeXml = store.ReadArchDefXml();
+        var typeXml = store.ReadArchDefXml(recId, archId);
         var columns = ArchDefParser.ParseColumns(typeXml);
 
         table = UniArchTableParser.ParseMinuteTable(
@@ -115,7 +115,7 @@
 
         // ВОТ ЭТА СТРОКА КЛЮЧЕВАЯ
         table.Columns.Clear();
-        table.Columns.AddRange(columns);
+        table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
 
 
         selectedColumn = 1;

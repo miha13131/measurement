@@ -1,5 +1,7 @@
 ﻿using System;
 using System.Buffers.Binary;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace DeviceMeasurementsApp.Models
 {
@@ -11,10 +13,13 @@ namespace DeviceMeasurementsApp.Models
             int periodMs = 60000,
             int maxRows = 300)
         {
-            const int floatsPerRow = 47;
-            const int rowBytes = floatsPerRow * 4;
+            const int serviceFloatsPerRow = 2;
 
-            if (archBytes.Length < 4 + rowBytes)
+            int rawFloatsPerRow = InferRawFloatsPerRow(archBytes);
+            int floatsPerRow = rawFloatsPerRow - serviceFloatsPerRow;
+            int rowBytes = rawFloatsPerRow * 4;
+
+            if (archBytes.Length < rowBytes)
                 throw new ArgumentException("arch file too small");
 
             var table = new UniArchTable();
@@ -31,19 +36,18 @@ namespace DeviceMeasurementsApp.Models
             }
 
 
-            int payload = archBytes.Length - 4;
-            int totalRows = payload / rowBytes;
+            int totalRows = archBytes.Length / rowBytes;
             int rows = Math.Min(totalRows, maxRows);
 
             for (int r = 0; r < rows; r++)
             {
                 var row = new float[floatsPerRow];
-                int baseOffset = 4 + r * rowBytes;
+                int baseOffset = r * rowBytes;
 
                 for (int c = 0; c < floatsPerRow; c++)
                 {
                     uint be = BinaryPrimitives.ReadUInt32BigEndian(
-                        archBytes.AsSpan(baseOffset + c * 4, 4));
+                        archBytes.AsSpan(baseOffset + (c + serviceFloatsPerRow) * 4, 4));
                     row[c] = BitConverter.Int32BitsToSingle((int)be);
                 }
 
@@ -52,6 +56,78 @@ namespace DeviceMeasurementsApp.Models
             }
 
             return table;
+        }
+
+        private static int InferRawFloatsPerRow(byte[] archBytes)
+        {
+            const uint marker = 0x000000AD;
+
+            if (archBytes.Length < 16)
+                throw new ArgumentException("arch file too small");
+
+            var markerFloatIndexes = new List<int>();
+            int maxFloatsToScan = Math.Min(30000, archBytes.Length / 4);
+
+            for (int i = 0; i < maxFloatsToScan; i++)
+            {
+                uint be = BinaryPrimitives.ReadUInt32BigEndian(archBytes.AsSpan(i * 4, 4));
+                if (be == marker)
+                    markerFloatIndexes.Add(i);
+            }
+
+            if (markerFloatIndexes.Count < 3)
+                return 47;
+
+            var topDiffs = markerFloatIndexes
+                .Zip(markerFloatIndexes.Skip(1), (a, b) => b - a)
+                .Where(d => d > 1)
+                .GroupBy(d => d)
+                .Select(g => new { Diff = g.Key, Count = g.Count() })
+                .OrderByDescending(x => x.Count)
+                .ThenByDescending(x => x.Diff)
+                .Take(3)
+                .ToArray();
+
+            if (topDiffs.Length == 0)
+                return 47;
+
+            var candidates = new HashSet<int>(topDiffs.Select(x => x.Diff));
+            if (topDiffs.Length >= 2)
+            {
+                candidates.Add(topDiffs[0].Diff + topDiffs[1].Diff);
+            }
+
+            int totalFloats = archBytes.Length / 4;
+
+            int Score(int rawFloatsPerRow)
+            {
+                if (rawFloatsPerRow < 3 || totalFloats % rawFloatsPerRow != 0)
+                    return -1;
+
+                int rowBytes = rawFloatsPerRow * 4;
+                int rows = totalFloats / rawFloatsPerRow;
+                int sampleRows = Math.Min(rows, 300);
+                int markerHits = 0;
+
+                for (int r = 0; r < sampleRows; r++)
+                {
+                    uint start = BinaryPrimitives.ReadUInt32BigEndian(
+                        archBytes.AsSpan(r * rowBytes, 4));
+                    if (start == marker)
+                        markerHits++;
+                }
+
+                return markerHits;
+            }
+
+            var best = candidates
+                .Select(c => new { Candidate = c, Score = Score(c) })
+                .Where(x => x.Score >= 0)
+                .OrderByDescending(x => x.Score)
+                .ThenBy(x => x.Candidate)
+                .FirstOrDefault();
+
+            return best?.Candidate ?? 47;
         }
     }
 }
