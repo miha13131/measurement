@@ -13,6 +13,10 @@ namespace DeviceMeasurementsApp.Models
             int periodMs = 60000,
             int maxRows = 300)
         {
+            // Minute archives in common EMI cases use 47 float32 values per row,
+            // where first 2 are service fields.
+            // MAIN uses a wider row layout, so we infer row width dynamically
+            // and fallback to 47 when inference is not reliable.
             const int serviceFloatsPerRow = 2;
 
             int rawFloatsPerRow = InferRawFloatsPerRow(archBytes);
