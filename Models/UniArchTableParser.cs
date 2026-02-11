@@ -1,8 +1,7 @@
-﻿using System;
+using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Linq;
-
 namespace DeviceMeasurementsApp.Models
 {
     public static class UniArchTableParser
@@ -13,12 +12,10 @@ namespace DeviceMeasurementsApp.Models
             int periodMs = 60000,
             int maxRows = 300)
         {
-            // Minute archives in common EMI cases use 47 float32 values per row,
-            // where first 2 are service fields.
-            // MAIN uses a wider row layout, so we infer row width dynamically
-            // and fallback to 47 when inference is not reliable.
+            // Minute .arch rows contain 47 float32 values.
+            // First 2 values are service fields (marker + internal value),
+            // measurement payload starts from the 3rd float.
             const int serviceFloatsPerRow = 2;
-
             int rawFloatsPerRow = InferRawFloatsPerRow(archBytes);
             int floatsPerRow = rawFloatsPerRow - serviceFloatsPerRow;
             int rowBytes = rawFloatsPerRow * 4;
@@ -61,7 +58,6 @@ namespace DeviceMeasurementsApp.Models
 
             return table;
         }
-
         private static int InferRawFloatsPerRow(byte[] archBytes)
         {
             const uint marker = 0x000000AD;
