@@ -1,0 +1,314 @@
+@page "/meter-analysis"
+@inject HttpClient Http
+@inject IJSRuntime JS
+
+@using DeviceMeasurementsApp.Models
+@using DeviceMeasurementsApp.Services
+
+<h3>Meter trend (multi-meter)</h3>
+
+<p style="margin-bottom:10px; max-width:900px;">
+    Простой вариант как на примере: один показатель для нескольких счётчиков.
+    <strong>X</strong> — время, <strong>Y</strong> — выбранный параметр (V или W).
+</p>
+
+<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+    <button @onclick="LoadAndDraw">Load + Draw</button>
+
+    <label>Параметр:</label>
+    <select @onchange="OnSignalChanged" disabled="@(meters.Count == 0)">
+        @foreach (var s in signals)
+        {
+            <option value="@s.Key" selected="@(s.Key == selectedSignal)">@s.Label</option>
+        }
+    </select>
+</div>
+
+@if (meters.Count > 0)
+{
+    <div style="margin-bottom:10px;">
+        @foreach (var meter in meters)
+        {
+            <label style="margin-right:12px;">
+                <input type="checkbox" checked="@meter.Enabled" @onchange="(e => ToggleMeter(meter.Id, (bool?)e.Value == true))" />
+                @meter.Name
+            </label>
+        }
+    </div>
+}
+
+<p>@status</p>
+
+@if (meters.Count > 0)
+{
+    <div style="height:620px; border:1px solid #d6d9df; background:#fafafa; padding:8px;">
+        <canvas id="meterCompareCanvas"></canvas>
+    </div>
+}
+
+@code {
+    private sealed record Rec(int Id, string Name);
+    private sealed record Signal(string Key, string Label, string YAxis);
+
+    private sealed class MeterData
+    {
+        public int Id { get; init; }
+        public string Name { get; init; } = string.Empty;
+        public bool Enabled { get; set; } = true;
+        public required UniArchTable Table { get; init; }
+        public required Dictionary<string, int> IndexByName { get; init; }
+        public required Dictionary<string, int> NormalizedIndexByName { get; init; }
+    }
+
+    private readonly List<Rec> recs =
+    [
+        new(58, "EMI1"),
+        new(60, "EMI2"),
+        new(59, "EMI3"),
+        new(1, "MAIN")
+    ];
+
+    private readonly List<Signal> signals =
+    [
+        new("P_avg_3P", "Active power total (P_avg_3P)", "Power [W]"),
+        new("P_avg_P1", "Active power L1 (P_avg_P1)", "Power [W]"),
+        new("P_avg_P2", "Active power L2 (P_avg_P2)", "Power [W]"),
+        new("P_avg_P3", "Active power L3 (P_avg_P3)", "Power [W]"),
+        new("U_avg_U1", "Voltage L1 (U_avg_U1)", "Voltage [V]"),
+        new("U_avg_U2", "Voltage L2 (U_avg_U2)", "Voltage [V]"),
+        new("U_avg_U3", "Voltage L3 (U_avg_U3)", "Voltage [V]"),
+        new("U_avg_LL", "Voltage L-L avg ((U12+U23+U31)/3)", "Voltage [V]")
+    ];
+
+    private string selectedSignal = "P_avg_3P";
+    private string status = "Waiting…";
+
+    private CeaZipStore? store;
+    private readonly List<MeterData> meters = [];
+
+    private async Task LoadAndDraw()
+    {
+        status = "Loading archive…";
+        store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+
+        meters.Clear();
+
+        foreach (var rec in recs)
+        {
+            var meter = TryLoadMeter(rec);
+            if (meter != null)
+            {
+                meters.Add(meter);
+            }
+        }
+
+        status = meters.Count == 0 ? "No meter data loaded." : $"Loaded {meters.Count} meter(s).";
+        await DrawChart();
+    }
+
+    private MeterData? TryLoadMeter(Rec rec)
+    {
+        if (store == null)
+        {
+            return null;
+        }
+
+        var archIds = store.GetArchIds(rec.Id).ToList();
+        if (archIds.Count == 0)
+        {
+            return null;
+        }
+
+        var archId = archIds.First();
+        var pack = store.GetBinPacks(rec.Id, archId).FirstOrDefault();
+        if (pack == null)
+        {
+            return null;
+        }
+
+        var typeXml = store.ReadArchDefXml(rec.Id, archId);
+        var columns = ArchDefParser.ParseColumns(typeXml);
+
+        var table = UniArchTableParser.ParseMinuteTable(
+            store.Read(pack.Entry),
+            pack.TimeUtc.ToLocalTime(),
+            periodMs: 60000,
+            maxRows: 500);
+
+        table.Columns.Clear();
+        table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
+
+        var indexByName = table.Columns
+            .Select((c, i) => new { c.Name, Index = i })
+            .GroupBy(x => x.Name)
+            .ToDictionary(g => g.Key, g => g.First().Index, StringComparer.OrdinalIgnoreCase);
+
+        var normalizedIndexByName = table.Columns
+            .Select((c, i) => new { Name = NormalizeName(c.Name), Index = i })
+            .GroupBy(x => x.Name)
+            .ToDictionary(g => g.Key, g => g.First().Index, StringComparer.OrdinalIgnoreCase);
+
+        return new MeterData
+        {
+            Id = rec.Id,
+            Name = rec.Name,
+            Table = table,
+            IndexByName = indexByName,
+            NormalizedIndexByName = normalizedIndexByName
+        };
+    }
+
+    private async Task OnSignalChanged(ChangeEventArgs e)
+    {
+        selectedSignal = e.Value?.ToString() ?? selectedSignal;
+        await DrawChart();
+    }
+
+    private async Task ToggleMeter(int meterId, bool isEnabled)
+    {
+        var meter = meters.FirstOrDefault(m => m.Id == meterId);
+        if (meter == null)
+        {
+            return;
+        }
+
+        meter.Enabled = isEnabled;
+        await DrawChart();
+    }
+
+    private async Task DrawChart()
+    {
+        if (meters.Count == 0)
+        {
+            return;
+        }
+
+        string[] colors = ["#2f7ed8", "#8bbc21", "#910000", "#1aadce", "#492970"];
+        int colorIndex = 0;
+
+        int totalPoints = 0;
+
+        var datasets = meters
+            .Where(m => m.Enabled)
+            .Select(m =>
+            {
+                var points = BuildPoints(m).ToArray();
+                totalPoints += points.Length;
+                var color = colors[colorIndex++ % colors.Length];
+
+                return new
+                {
+                    label = m.Name,
+                    borderColor = color,
+                    backgroundColor = color,
+                    data = points
+                };
+            })
+            .Where(d => d.data.Length > 0)
+            .ToArray();
+
+        var yAxis = signals.First(s => s.Key == selectedSignal).YAxis;
+
+        await JS.InvokeVoidAsync(
+            "chartInterop.renderMultiTimeSeriesChart",
+            "meterCompareCanvas",
+            datasets,
+            yAxis);
+
+        if (datasets.Length == 0)
+        {
+            status = "No data for selected signal.";
+            return;
+        }
+
+        var enabledTimes = meters
+            .Where(m => m.Enabled && m.Table.Time.Count > 0)
+            .Select(m => (Start: m.Table.Time.First(), End: m.Table.Time[Math.Min(m.Table.Time.Count, 500) - 1]))
+            .ToList();
+
+        var from = enabledTimes.Min(t => t.Start);
+        var to = enabledTimes.Max(t => t.End);
+        status = $"Rendered {datasets.Length} meter series, points: {totalPoints}. X=time ({from:HH:mm}..{to:HH:mm}), Y={yAxis}.";
+    }
+
+    private IEnumerable<object> BuildPoints(MeterData meter)
+    {
+        int count = Math.Min(meter.Table.Time.Count, meter.Table.Rows.Count);
+
+        for (int i = 0; i < count; i++)
+        {
+            var y = ReadSignalValue(meter, i);
+            if (!y.HasValue)
+            {
+                continue;
+            }
+
+            yield return new
+            {
+                x = meter.Table.Time[i],
+                y = y.Value
+            };
+        }
+    }
+
+    private double? ReadSignalValue(MeterData meter, int rowIndex)
+    {
+        if (selectedSignal == "U_avg_LL")
+        {
+            return Average(meter, rowIndex, "U_avg_U12", "U_avg_U23", "U_avg_U31");
+        }
+
+        return Single(meter, rowIndex, selectedSignal);
+    }
+
+    private double? Single(MeterData meter, int rowIndex, string name)
+    {
+        var idx = ResolveColumnIndex(meter, name);
+        if (!idx.HasValue)
+        {
+            return null;
+        }
+
+        if (rowIndex >= meter.Table.Rows.Count || idx.Value >= meter.Table.Rows[rowIndex].Length)
+        {
+            return null;
+        }
+
+        return meter.Table.Rows[rowIndex][idx.Value];
+    }
+
+    private int? ResolveColumnIndex(MeterData meter, string name)
+    {
+        if (meter.IndexByName.TryGetValue(name, out var exact))
+        {
+            return exact;
+        }
+
+        var normalized = NormalizeName(name);
+        if (meter.NormalizedIndexByName.TryGetValue(normalized, out var normalizedIndex))
+        {
+            return normalizedIndex;
+        }
+
+        var fallback = meter.NormalizedIndexByName
+            .FirstOrDefault(kvp => kvp.Key.EndsWith(normalized, StringComparison.OrdinalIgnoreCase));
+
+        return fallback.Equals(default(KeyValuePair<string, int>)) ? null : fallback.Value;
+    }
+
+    private static string NormalizeName(string value)
+    {
+        return string.Concat(value.Where(ch => char.IsLetterOrDigit(ch) || ch == '_')).ToUpperInvariant();
+    }
+
+    private double? Average(MeterData meter, int rowIndex, params string[] names)
+    {
+        var values = names
+            .Select(name => Single(meter, rowIndex, name))
+            .Where(v => v.HasValue)
+            .Select(v => v!.Value)
+            .ToArray();
+
+        return values.Length == 0 ? null : values.Average();
+    }
+}
