@@ -1,22 +1,15 @@
 window.pieInterop = {
     chart: null,
 
-    destroyCanvasChart: function (canvas) {
-        if (!canvas || typeof Chart === 'undefined') return;
-
-        const existing = Chart.getChart(canvas);
-        if (existing) {
-            existing.destroy();
-        }
-    },
-
     renderSharePieChart: function (canvasId, labels, values, title) {
         const canvas = document.getElementById(canvasId);
         if (!canvas || typeof Chart === 'undefined') return;
 
         const ctx = canvas.getContext('2d');
 
-        this.destroyCanvasChart(canvas);
+        if (this.chart) {
+            this.chart.destroy();
+        }
 
         const safeLabels = labels || [];
         const safeValues = values || [];
