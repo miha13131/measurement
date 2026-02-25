@@ -158,50 +158,5 @@ window.chartInterop = {
                 }
             }]
         });
-    },
-
-    renderPieChart: function (canvasId, labels, values, title) {
-        const canvas = document.getElementById(canvasId);
-        if (!canvas) return;
-
-        const ctx = canvas.getContext('2d');
-
-        if (this.chart) {
-            this.chart.destroy();
-        }
-
-        const colors = ['#2f7ed8', '#8bbc21', '#910000', '#1aadce', '#492970', '#f28f43', '#77a1e5'];
-
-        this.chart = new Chart(ctx, {
-            type: 'pie',
-            data: {
-                labels: labels || [],
-                datasets: [{
-                    data: values || [],
-                    backgroundColor: (labels || []).map((_, i) => colors[i % colors.length]),
-                    borderColor: '#ffffff',
-                    borderWidth: 2
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { position: 'top' },
-                    title: {
-                        display: true,
-                        text: title || 'Share'
-                    },
-                    tooltip: {
-                        callbacks: {
-                            label: function (context) {
-                                const value = context.parsed || 0;
-                                return `${context.label}: ${value.toFixed(2)}%`;
-                            }
-                        }
-                    }
-                }
-            }
-        });
     }
 };

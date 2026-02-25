@@ -9,7 +9,7 @@
 
 <p style="margin-bottom:10px; max-width:1000px;">
     X = time, Y = selected metric. You can compare raw lines from each meter
-    and optionally add an aggregated line (SUM/AVG/MIN/MAX/RANGE/STDDEV) or a share pie chart.
+    and optionally add an aggregated line (SUM/AVG/MIN/MAX/RANGE/STDDEV).
 </p>
 
 <div style="margin-bottom:10px; font-size:13px; color:#374151;">
@@ -161,8 +161,7 @@
         new("min", "MIN"),
         new("max", "MAX"),
         new("range", "RANGE (max-min)"),
-        new("stddev", "STDDEV"),
-        new("share", "SHARE (%) — Pie")
+        new("stddev", "STDDEV")
     ];
 
     private string selectedSignal = "P_avg_3P";
@@ -329,25 +328,6 @@
             }
         }
 
-        if (selectedAggregation == "share")
-        {
-            var shareDistribution = BuildShareDistribution(rawSeries);
-
-            await JS.InvokeVoidAsync(
-                "chartInterop.renderPieChart",
-                "meterCompareCanvas",
-                shareDistribution.Select(x => x.Meter).ToArray(),
-                shareDistribution.Select(x => x.SharePercent).ToArray(),
-                "Share by source (%)");
-
-            if (shareDistribution.Count == 0)
-            {
-                status = "No data to calculate SHARE distribution.";
-            }
-
-            return;
-        }
-
         var aggregated = BuildAggregatedSeries(rawSeries, selectedAggregation).ToList();
         if (aggregated.Count > 0)
         {
@@ -450,31 +430,6 @@
         }
 
         return result;
-    }
-
-    private List<(string Meter, double SharePercent)> BuildShareDistribution(
-        Dictionary<string, List<(DateTime X, double Y)>> rawSeries)
-    {
-        var meterTotals = rawSeries
-            .Select(kvp => (
-                Meter: kvp.Key,
-                Total: kvp.Value
-                    .Select(point => point.Y)
-                    .Where(v => !double.IsNaN(v) && !double.IsInfinity(v))
-                    .Sum(v => Math.Max(v, 0))))
-            .Where(x => x.Total > 0)
-            .ToList();
-
-        var total = meterTotals.Sum(x => x.Total);
-        if (total <= 0)
-        {
-            return [];
-        }
-
-        return meterTotals
-            .Select(x => (x.Meter, SharePercent: (x.Total / total) * 100d))
-            .OrderByDescending(x => x.SharePercent)
-            .ToList();
     }
 
     private double? ReadSignalValue(MeterData meter, int rowIndex)
