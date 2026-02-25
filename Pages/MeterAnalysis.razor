@@ -5,17 +5,26 @@
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
 
-<h3>Meter trend (multi-meter)</h3>
+<h3>Meter trend (multi-meter + aggregation)</h3>
 
-<p style="margin-bottom:10px; max-width:900px;">
-    Простой вариант как на примере: один показатель для нескольких счётчиков.
-    <strong>X</strong> — время, <strong>Y</strong> — выбранный параметр (V или W).
+<p style="margin-bottom:10px; max-width:1000px;">
+    X = time, Y = selected metric. You can compare raw lines from each meter
+    and optionally add an aggregated line (SUM/AVG/MIN/MAX/RANGE/STDDEV).
 </p>
+
+<div style="margin-bottom:10px; font-size:13px; color:#374151;">
+    <strong>Useful aggregation examples:</strong>
+    <ul style="margin:6px 0 0 18px;">
+        <li><strong>P_avg_3P + SUM</strong> — total active power across selected meters (overall site load).</li>
+        <li><strong>U_phase_imbalance + MAX</strong> — worst phase voltage imbalance at each timestamp.</li>
+        <li><strong>THDI_3ph_avg + AVG</strong> — average current harmonic level across meters.</li>
+    </ul>
+</div>
 
 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
     <button @onclick="LoadAndDraw">Load + Draw</button>
 
-    <label>Параметр:</label>
+    <label>Metric:</label>
     <select @onchange="OnSignalChanged" disabled="@(meters.Count == 0)">
         @foreach (var s in signals)
         {
@@ -23,13 +32,18 @@
         }
     </select>
 
-    <label>Агрегация:</label>
+    <label>Aggregation:</label>
     <select @onchange="OnAggregationChanged" disabled="@(meters.Count == 0)">
-        @foreach (var a in aggregations)
+        @foreach (var option in aggregationOptions)
         {
-            <option value="@a.Key" selected="@(a.Key == selectedAggregation)">@a.Label</option>
+            <option value="@option.Key" selected="@(option.Key == selectedAggregation)">@option.Label</option>
         }
     </select>
+
+    <label>
+        <input type="checkbox" checked="@showRawMeters" @onchange="OnShowRawChanged" />
+        Raw meters
+    </label>
 </div>
 
 @if (meters.Count > 0)
@@ -49,16 +63,54 @@
 
 @if (meters.Count > 0)
 {
-    <div style="height:620px; border:1px solid #d6d9df; background:#fafafa; padding:8px;">
+    <div style="height:680px; border:1px solid #d6d9df; background:#fafafa; padding:8px;">
         <canvas id="meterCompareCanvas"></canvas>
+    </div>
+}
+
+@if (summaryRows.Count > 0)
+{
+    <h5 style="margin-top:14px;">Aggregation preview (last 12 points)</h5>
+    <div style="overflow:auto; max-height:320px; border:1px solid #ddd; background:white;">
+        <table class="table table-sm table-striped" style="margin-bottom:0;">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    @foreach (var meterName in activeMeterNames)
+                    {
+                        <th>@meterName</th>
+                    }
+                    <th>@CurrentAggregationLabel</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in summaryRows)
+                {
+                    <tr>
+                        <td>@row.Time.ToString("HH:mm")</td>
+                        @foreach (var meterName in activeMeterNames)
+                        {
+                            if (row.MeterValues.TryGetValue(meterName, out var value))
+                            {
+                                <td>@value.ToString("0.###")</td>
+                            }
+                            else
+                            {
+                                <td>—</td>
+                            }
+                        }
+                        <td>@row.AggregatedValue.ToString("0.###")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
     </div>
 }
 
 @code {
     private sealed record Rec(int Id, string Name);
     private sealed record Signal(string Key, string Label, string YAxis);
-    private sealed record Aggregation(string Key, string Label);
-    private sealed record Point(DateTime x, double y);
+    private sealed record AggregationOption(string Key, string Label);
 
     private sealed class MeterData
     {
@@ -69,6 +121,8 @@
         public required Dictionary<string, int> IndexByName { get; init; }
         public required Dictionary<string, int> NormalizedIndexByName { get; init; }
     }
+
+    private sealed record AggregationRow(DateTime Time, Dictionary<string, double> MeterValues, double AggregatedValue);
 
     private readonly List<Rec> recs =
     [
@@ -84,28 +138,48 @@
         new("P_avg_P1", "Active power L1 (P_avg_P1)", "Power [W]"),
         new("P_avg_P2", "Active power L2 (P_avg_P2)", "Power [W]"),
         new("P_avg_P3", "Active power L3 (P_avg_P3)", "Power [W]"),
+        new("Q_avg_3Q", "Reactive power total (Q_avg_3Q)", "Reactive power [var]"),
+        new("S_avg_3S", "Apparent power total (S_avg_3S)", "Apparent power [VA]"),
+        new("I_avg_mean", "Current avg 3-phase ((I1+I2+I3)/3)", "Current [A]"),
+        new("PF_3PF", "Power factor total (PF_3PF)", "PF"),
+        new("Cos_3Cosφ", "Cos φ total (Cos_3Cosφ)", "Cos φ"),
+        new("f_avg_f", "Frequency (f_avg_f)", "Frequency [Hz]"),
+        new("THDI_3ph_avg", "THDI avg 3-phase ((THDI1+THDI2+THDI3)/3)", "THDI [%]"),
+        new("U_phase_imbalance", "Voltage phase imbalance (max(U1,U2,U3)-min(...))", "Voltage imbalance [V]"),
+        new("P_to_S_ratio", "Power loading ratio (P_avg_3P / S_avg_3S * 100)", "Loading [%]"),
         new("U_avg_U1", "Voltage L1 (U_avg_U1)", "Voltage [V]"),
         new("U_avg_U2", "Voltage L2 (U_avg_U2)", "Voltage [V]"),
         new("U_avg_U3", "Voltage L3 (U_avg_U3)", "Voltage [V]"),
         new("U_avg_LL", "Voltage L-L avg ((U12+U23+U31)/3)", "Voltage [V]")
     ];
 
-    private readonly List<Aggregation> aggregations =
+    private readonly List<AggregationOption> aggregationOptions =
     [
-        new("trend", "Trend (временной ряд)"),
-        new("share", "Share (круговая диаграмма)")
+        new("none", "None"),
+        new("sum", "SUM "),
+        new("avg", "AVG "),
+        new("min", "MIN"),
+        new("max", "MAX"),
+        new("range", "RANGE (max-min)"),
+        new("stddev", "STDDEV")
     ];
 
     private string selectedSignal = "P_avg_3P";
-    private string selectedAggregation = "trend";
+    private string selectedAggregation = "sum";
+    private bool showRawMeters = true;
     private string status = "Waiting…";
 
     private CeaZipStore? store;
     private readonly List<MeterData> meters = [];
 
+    private readonly List<AggregationRow> summaryRows = [];
+    private List<string> activeMeterNames = [];
+
+    private string CurrentAggregationLabel => aggregationOptions.FirstOrDefault(x => x.Key == selectedAggregation)?.Label ?? "Aggregation";
+
     private async Task LoadAndDraw()
     {
-        status = "Loading archive…";
+        //status = "Loading archive…";
         store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
 
         meters.Clear();
@@ -119,7 +193,7 @@
             }
         }
 
-        status = meters.Count == 0 ? "No meter data loaded." : $"Loaded {meters.Count} meter(s).";
+        //status = meters.Count == 0 ? "No meter data loaded." : $"Loaded {meters.Count} meter(s).";
         await DrawChart();
     }
 
@@ -181,6 +255,18 @@
         await DrawChart();
     }
 
+    private async Task OnAggregationChanged(ChangeEventArgs e)
+    {
+        selectedAggregation = e.Value?.ToString() ?? selectedAggregation;
+        await DrawChart();
+    }
+
+    private async Task OnShowRawChanged(ChangeEventArgs e)
+    {
+        showRawMeters = (bool?)e.Value == true;
+        await DrawChart();
+    }
+
     private async Task ToggleMeter(int meterId, bool isEnabled)
     {
         var meter = meters.FirstOrDefault(m => m.Id == meterId);
@@ -193,49 +279,73 @@
         await DrawChart();
     }
 
-    private async Task OnAggregationChanged(ChangeEventArgs e)
-    {
-        selectedAggregation = e.Value?.ToString() ?? selectedAggregation;
-        await DrawChart();
-    }
-
     private async Task DrawChart()
     {
+        summaryRows.Clear();
+        activeMeterNames = [];
+
         if (meters.Count == 0)
         {
             return;
         }
 
         string[] colors = ["#2f7ed8", "#8bbc21", "#910000", "#1aadce", "#492970"];
-
-        if (selectedAggregation == "share")
-        {
-            await DrawShareChart(colors);
-            return;
-        }
-
         int colorIndex = 0;
-
         int totalPoints = 0;
 
-        var datasets = meters
-            .Where(m => m.Enabled)
-            .Select(m =>
+        var enabledMeters = meters.Where(m => m.Enabled).ToList();
+        activeMeterNames = enabledMeters.Select(m => m.Name).ToList();
+
+        var rawSeries = enabledMeters.ToDictionary(
+            m => m.Name,
+            m => BuildPoints(m).ToList());
+
+        var datasets = new List<object>();
+
+        if (showRawMeters)
+        {
+            foreach (var meter in enabledMeters)
             {
-                var points = BuildPoints(m).ToArray();
+                var points = rawSeries[meter.Name]
+                    .Select(p => new { x = p.X, y = p.Y })
+                    .ToArray();
+
+                if (points.Length == 0)
+                {
+                    continue;
+                }
+
                 totalPoints += points.Length;
                 var color = colors[colorIndex++ % colors.Length];
 
-                return new
+                datasets.Add(new
                 {
-                    label = m.Name,
+                    label = meter.Name,
                     borderColor = color,
                     backgroundColor = color,
                     data = points
-                };
-            })
-            .Where(d => d.data.Length > 0)
-            .ToArray();
+                });
+            }
+        }
+
+        var aggregated = BuildAggregatedSeries(rawSeries, selectedAggregation).ToList();
+        if (aggregated.Count > 0)
+        {
+            totalPoints += aggregated.Count;
+            datasets.Add(new
+            {
+                label = $"AGG: {CurrentAggregationLabel}",
+                borderColor = "#111827",
+                backgroundColor = "#111827",
+                borderDash = new[] { 7, 4 },
+                borderWidth = 3,
+                data = aggregated.Select(p => new { x = p.Time, y = p.Value }).ToArray()
+            });
+
+            summaryRows.AddRange(aggregated
+                .TakeLast(12)
+                .Select(x => new AggregationRow(x.Time, x.MeterValues, x.Value)));
+        }
 
         var yAxis = signals.First(s => s.Key == selectedSignal).YAxis;
 
@@ -245,65 +355,25 @@
             datasets,
             yAxis);
 
-        if (datasets.Length == 0)
+        if (datasets.Count == 0)
         {
-            status = "No data for selected signal.";
+            status = "No data for selected metric / aggregation.";
             return;
         }
 
-        var enabledTimes = meters
-            .Where(m => m.Enabled && m.Table.Time.Count > 0)
-            .Select(m => (Start: m.Table.Time.First(), End: m.Table.Time[Math.Min(m.Table.Time.Count, 500) - 1]))
+        var availableTimes = rawSeries.Values
+            .SelectMany(s => s)
+            .Select(p => p.X)
+            .OrderBy(t => t)
             .ToList();
 
-        var from = enabledTimes.Min(t => t.Start);
-        var to = enabledTimes.Max(t => t.End);
-        status = $"Rendered {datasets.Length} meter series, points: {totalPoints}. X=time ({from:HH:mm}..{to:HH:mm}), Y={yAxis}.";
+        var from = availableTimes.FirstOrDefault();
+        var to = availableTimes.LastOrDefault();
+
+        //status = $"Rendered {datasets.Count} series, points: {totalPoints}. X=time ({from:HH:mm}..{to:HH:mm}), Y={yAxis}, agg={CurrentAggregationLabel}.";
     }
 
-    private async Task DrawShareChart(string[] colors)
-    {
-        var slices = meters
-            .Where(m => m.Enabled)
-            .Select((m, index) =>
-            {
-                var values = BuildPoints(m)
-                    .Select(p => p.y)
-                    .ToArray();
-
-                return new
-                {
-                    m.Name,
-                    Value = values.Length == 0 ? 0 : values.Average(),
-                    Color = colors[index % colors.Length]
-                };
-            })
-            .Where(x => x.Value > 0)
-            .ToArray();
-
-        var total = slices.Sum(x => x.Value);
-        if (total <= 0)
-        {
-            await JS.InvokeVoidAsync("chartInterop.renderPieChart", "meterCompareCanvas", Array.Empty<object>(), "Share [%]");
-            status = "No positive values for selected signal to calculate Share.";
-            return;
-        }
-
-        var pieData = slices
-            .Select(s => new
-            {
-                label = s.Name,
-                value = Math.Round(s.Value / total * 100, 2),
-                backgroundColor = s.Color
-            })
-            .ToArray();
-
-        await JS.InvokeVoidAsync("chartInterop.renderPieChart", "meterCompareCanvas", pieData, "Share [%]");
-
-        status = $"Rendered Share pie for {pieData.Length} meter(s). Total={total:F2}. Formula: Shareᵢ = Pᵢ/Ptotal · 100%.";
-    }
-
-    private IEnumerable<Point> BuildPoints(MeterData meter)
+    private IEnumerable<(DateTime X, double Y)> BuildPoints(MeterData meter)
     {
         int count = Math.Min(meter.Table.Time.Count, meter.Table.Rows.Count);
 
@@ -315,18 +385,64 @@
                 continue;
             }
 
-            yield return new Point(meter.Table.Time[i], y.Value);
+            yield return (meter.Table.Time[i], y.Value);
         }
+    }
+
+    private IEnumerable<(DateTime Time, double Value, Dictionary<string, double> MeterValues)> BuildAggregatedSeries(
+        Dictionary<string, List<(DateTime X, double Y)>> rawSeries,
+        string aggregationKey)
+    {
+        if (aggregationKey == "none")
+        {
+            return [];
+        }
+
+        var grouped = rawSeries
+            .SelectMany(kvp => kvp.Value.Select(p => new { Meter = kvp.Key, p.X, p.Y }))
+            .GroupBy(x => x.X)
+            .OrderBy(g => g.Key)
+            .ToList();
+
+        var result = new List<(DateTime, double, Dictionary<string, double>)>();
+
+        foreach (var g in grouped)
+        {
+            var values = g.Select(x => x.Y).ToArray();
+            if (values.Length == 0)
+            {
+                continue;
+            }
+
+            double agg = aggregationKey switch
+            {
+                "sum" => values.Sum(),
+                "avg" => values.Average(),
+                "min" => values.Min(),
+                "max" => values.Max(),
+                "range" => values.Max() - values.Min(),
+                "stddev" => StdDev(values),
+                _ => values.Average()
+            };
+
+            var meterMap = g.ToDictionary(x => x.Meter, x => x.Y);
+            result.Add((g.Key, agg, meterMap));
+        }
+
+        return result;
     }
 
     private double? ReadSignalValue(MeterData meter, int rowIndex)
     {
-        if (selectedSignal == "U_avg_LL")
+        return selectedSignal switch
         {
-            return Average(meter, rowIndex, "U_avg_U12", "U_avg_U23", "U_avg_U31");
-        }
-
-        return Single(meter, rowIndex, selectedSignal);
+            "U_avg_LL" => Average(meter, rowIndex, "U_avg_U12", "U_avg_U23", "U_avg_U31"),
+            "I_avg_mean" => Average(meter, rowIndex, "I_avg_I1", "I_avg_I2", "I_avg_I3"),
+            "THDI_3ph_avg" => Average(meter, rowIndex, "Harmonics/THDI_avg_THDI1", "Harmonics/THDI_avg_THDI2", "Harmonics/THDI_avg_THDI3"),
+            "U_phase_imbalance" => Range(meter, rowIndex, "U_avg_U1", "U_avg_U2", "U_avg_U3"),
+            "P_to_S_ratio" => RatioPercent(meter, rowIndex, "P_avg_3P", "S_avg_3S"),
+            _ => Single(meter, rowIndex, selectedSignal)
+        };
     }
 
     private double? Single(MeterData meter, int rowIndex, string name)
@@ -379,4 +495,42 @@
 
         return values.Length == 0 ? null : values.Average();
     }
+
+
+    private double? Range(MeterData meter, int rowIndex, params string[] names)
+    {
+        var values = names
+            .Select(name => Single(meter, rowIndex, name))
+            .Where(v => v.HasValue)
+            .Select(v => v!.Value)
+            .ToArray();
+
+        return values.Length == 0 ? null : values.Max() - values.Min();
+    }
+
+    private double? RatioPercent(MeterData meter, int rowIndex, string numeratorName, string denominatorName)
+    {
+        var numerator = Single(meter, rowIndex, numeratorName);
+        var denominator = Single(meter, rowIndex, denominatorName);
+
+        if (!numerator.HasValue || !denominator.HasValue || Math.Abs(denominator.Value) < 0.000001)
+        {
+            return null;
+        }
+
+        return (numerator.Value / denominator.Value) * 100d;
+    }
+
+    private static double StdDev(double[] values)
+    {
+        if (values.Length == 0)
+        {
+            return 0;
+        }
+
+        var mean = values.Average();
+        var variance = values.Select(v => (v - mean) * (v - mean)).Average();
+        return Math.Sqrt(variance);
+    }
+
 }
