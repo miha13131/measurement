@@ -337,7 +337,7 @@
             }
         }
 
-        if (IsSharePieMode)
+        if (selectedAggregation == "share")
         {
             var shareDistribution = BuildShareDistribution(rawSeries);
 
@@ -351,10 +351,6 @@
             if (shareDistribution.Count == 0)
             {
                 status = "No data to calculate SHARE distribution.";
-            }
-            else
-            {
-                status = "SHARE pie is shown for P_avg_3P (Pi / Ptotal * 100%).";
             }
 
             return;
