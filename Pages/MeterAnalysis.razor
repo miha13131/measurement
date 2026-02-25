@@ -9,7 +9,7 @@
 
 <p style="margin-bottom:10px; max-width:1000px;">
     X = time, Y = selected metric. You can compare raw lines from each meter
-    and optionally add an aggregated line (SUM/AVG/MIN/MAX/RANGE/STDDEV).
+    and optionally add an aggregated line (SUM/AVG/MIN/MAX/RANGE/STDDEV) or a share pie chart.
 </p>
 
 <div style="margin-bottom:10px; font-size:13px; color:#374151;">
@@ -18,6 +18,7 @@
         <li><strong>P_avg_3P + SUM</strong> — total active power across selected meters (overall site load).</li>
         <li><strong>U_phase_imbalance + MAX</strong> — worst phase voltage imbalance at each timestamp.</li>
         <li><strong>THDI_3ph_avg + AVG</strong> — average current harmonic level across meters.</li>
+        <li><strong>P_avg_3P + SHARE</strong> — source contribution pie by formula Share_i = P_i / P_total × 100%.</li>
     </ul>
 </div>
 
@@ -161,7 +162,8 @@
         new("min", "MIN"),
         new("max", "MAX"),
         new("range", "RANGE (max-min)"),
-        new("stddev", "STDDEV")
+        new("stddev", "STDDEV"),
+        new("share", "SHARE (%) — Pie (for P_avg_3P)")
     ];
 
     private string selectedSignal = "P_avg_3P";
@@ -176,6 +178,7 @@
     private List<string> activeMeterNames = [];
 
     private string CurrentAggregationLabel => aggregationOptions.FirstOrDefault(x => x.Key == selectedAggregation)?.Label ?? "Aggregation";
+    private bool IsSharePieMode => selectedAggregation == "share" && selectedSignal == "P_avg_3P";
 
     private async Task LoadAndDraw()
     {
@@ -252,6 +255,12 @@
     private async Task OnSignalChanged(ChangeEventArgs e)
     {
         selectedSignal = e.Value?.ToString() ?? selectedSignal;
+
+        if (selectedAggregation == "share" && selectedSignal != "P_avg_3P")
+        {
+            selectedAggregation = "none";
+        }
+
         await DrawChart();
     }
 
@@ -328,6 +337,29 @@
             }
         }
 
+        if (IsSharePieMode)
+        {
+            var shareDistribution = BuildShareDistribution(rawSeries);
+
+            await JS.InvokeVoidAsync(
+                "chartInterop.renderPieChart",
+                "meterCompareCanvas",
+                shareDistribution.Select(x => x.Meter).ToArray(),
+                shareDistribution.Select(x => x.SharePercent).ToArray(),
+                "Share by source (%)");
+
+            if (shareDistribution.Count == 0)
+            {
+                status = "No data to calculate SHARE distribution.";
+            }
+            else
+            {
+                status = "SHARE pie is shown for P_avg_3P (Pi / Ptotal * 100%).";
+            }
+
+            return;
+        }
+
         var aggregated = BuildAggregatedSeries(rawSeries, selectedAggregation).ToList();
         if (aggregated.Count > 0)
         {
@@ -393,7 +425,7 @@
         Dictionary<string, List<(DateTime X, double Y)>> rawSeries,
         string aggregationKey)
     {
-        if (aggregationKey == "none")
+        if (aggregationKey is "none" or "share")
         {
             return [];
         }
@@ -430,6 +462,31 @@
         }
 
         return result;
+    }
+
+    private List<(string Meter, double SharePercent)> BuildShareDistribution(
+        Dictionary<string, List<(DateTime X, double Y)>> rawSeries)
+    {
+        var meterTotals = rawSeries
+            .Select(kvp => (
+                Meter: kvp.Key,
+                Total: kvp.Value
+                    .Select(point => point.Y)
+                    .Where(v => !double.IsNaN(v) && !double.IsInfinity(v))
+                    .Sum(v => Math.Max(v, 0))))
+            .Where(x => x.Total > 0)
+            .ToList();
+
+        var total = meterTotals.Sum(x => x.Total);
+        if (total <= 0)
+        {
+            return [];
+        }
+
+        return meterTotals
+            .Select(x => (x.Meter, SharePercent: (x.Total / total) * 100d))
+            .OrderByDescending(x => x.SharePercent)
+            .ToList();
     }
 
     private double? ReadSignalValue(MeterData meter, int rowIndex)
