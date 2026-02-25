@@ -60,6 +60,46 @@ window.chartInterop = {
         });
     },
 
+    renderPieChart: function (canvasId, slices, valueLabel) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+
+        if (this.chart) {
+            this.chart.destroy();
+        }
+
+        const normalized = slices || [];
+
+        this.chart = new Chart(ctx, {
+            type: 'pie',
+            data: {
+                labels: normalized.map(s => s.label),
+                datasets: [{
+                    data: normalized.map(s => s.value),
+                    backgroundColor: normalized.map(s => s.backgroundColor || '#2f7ed8'),
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'top' },
+                    tooltip: {
+                        callbacks: {
+                            label: (context) => {
+                                const v = Number(context.parsed || 0).toFixed(2);
+                                return `${context.label}: ${v}%`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    },
+
     renderMultiTimeSeriesChart: function (canvasId, datasets, yAxisLabel) {
         const canvas = document.getElementById(canvasId);
         if (!canvas) return;
