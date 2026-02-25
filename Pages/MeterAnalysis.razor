@@ -22,6 +22,14 @@
             <option value="@s.Key" selected="@(s.Key == selectedSignal)">@s.Label</option>
         }
     </select>
+
+    <label>Агрегация:</label>
+    <select @onchange="OnAggregationChanged" disabled="@(meters.Count == 0)">
+        @foreach (var a in aggregations)
+        {
+            <option value="@a.Key" selected="@(a.Key == selectedAggregation)">@a.Label</option>
+        }
+    </select>
 </div>
 
 @if (meters.Count > 0)
@@ -49,6 +57,8 @@
 @code {
     private sealed record Rec(int Id, string Name);
     private sealed record Signal(string Key, string Label, string YAxis);
+    private sealed record Aggregation(string Key, string Label);
+    private sealed record Point(DateTime x, double y);
 
     private sealed class MeterData
     {
@@ -80,7 +90,14 @@
         new("U_avg_LL", "Voltage L-L avg ((U12+U23+U31)/3)", "Voltage [V]")
     ];
 
+    private readonly List<Aggregation> aggregations =
+    [
+        new("trend", "Trend (временной ряд)"),
+        new("share", "Share (круговая диаграмма)")
+    ];
+
     private string selectedSignal = "P_avg_3P";
+    private string selectedAggregation = "trend";
     private string status = "Waiting…";
 
     private CeaZipStore? store;
@@ -176,6 +193,12 @@
         await DrawChart();
     }
 
+    private async Task OnAggregationChanged(ChangeEventArgs e)
+    {
+        selectedAggregation = e.Value?.ToString() ?? selectedAggregation;
+        await DrawChart();
+    }
+
     private async Task DrawChart()
     {
         if (meters.Count == 0)
@@ -184,6 +207,13 @@
         }
 
         string[] colors = ["#2f7ed8", "#8bbc21", "#910000", "#1aadce", "#492970"];
+
+        if (selectedAggregation == "share")
+        {
+            await DrawShareChart(colors);
+            return;
+        }
+
         int colorIndex = 0;
 
         int totalPoints = 0;
@@ -231,7 +261,49 @@
         status = $"Rendered {datasets.Length} meter series, points: {totalPoints}. X=time ({from:HH:mm}..{to:HH:mm}), Y={yAxis}.";
     }
 
-    private IEnumerable<object> BuildPoints(MeterData meter)
+    private async Task DrawShareChart(string[] colors)
+    {
+        var slices = meters
+            .Where(m => m.Enabled)
+            .Select((m, index) =>
+            {
+                var values = BuildPoints(m)
+                    .Select(p => p.y)
+                    .ToArray();
+
+                return new
+                {
+                    m.Name,
+                    Value = values.Length == 0 ? 0 : values.Average(),
+                    Color = colors[index % colors.Length]
+                };
+            })
+            .Where(x => x.Value > 0)
+            .ToArray();
+
+        var total = slices.Sum(x => x.Value);
+        if (total <= 0)
+        {
+            await JS.InvokeVoidAsync("chartInterop.renderPieChart", "meterCompareCanvas", Array.Empty<object>(), "Share [%]");
+            status = "No positive values for selected signal to calculate Share.";
+            return;
+        }
+
+        var pieData = slices
+            .Select(s => new
+            {
+                label = s.Name,
+                value = Math.Round(s.Value / total * 100, 2),
+                backgroundColor = s.Color
+            })
+            .ToArray();
+
+        await JS.InvokeVoidAsync("chartInterop.renderPieChart", "meterCompareCanvas", pieData, "Share [%]");
+
+        status = $"Rendered Share pie for {pieData.Length} meter(s). Total={total:F2}. Formula: Shareᵢ = Pᵢ/Ptotal · 100%.";
+    }
+
+    private IEnumerable<Point> BuildPoints(MeterData meter)
     {
         int count = Math.Min(meter.Table.Time.Count, meter.Table.Rows.Count);
 
@@ -243,11 +315,7 @@
                 continue;
             }
 
-            yield return new
-            {
-                x = meter.Table.Time[i],
-                y = y.Value
-            };
+            yield return new Point(meter.Table.Time[i], y.Value);
         }
     }
 
