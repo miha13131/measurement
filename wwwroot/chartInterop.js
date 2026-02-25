@@ -60,46 +60,6 @@ window.chartInterop = {
         });
     },
 
-    renderPieChart: function (canvasId, slices, valueLabel) {
-        const canvas = document.getElementById(canvasId);
-        if (!canvas) return;
-
-        const ctx = canvas.getContext('2d');
-
-        if (this.chart) {
-            this.chart.destroy();
-        }
-
-        const normalized = slices || [];
-
-        this.chart = new Chart(ctx, {
-            type: 'pie',
-            data: {
-                labels: normalized.map(s => s.label),
-                datasets: [{
-                    data: normalized.map(s => s.value),
-                    backgroundColor: normalized.map(s => s.backgroundColor || '#2f7ed8'),
-                    borderWidth: 1
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { position: 'top' },
-                    tooltip: {
-                        callbacks: {
-                            label: (context) => {
-                                const v = Number(context.parsed || 0).toFixed(2);
-                                return `${context.label}: ${v}%`;
-                            }
-                        }
-                    }
-                }
-            }
-        });
-    },
-
     renderMultiTimeSeriesChart: function (canvasId, datasets, yAxisLabel) {
         const canvas = document.getElementById(canvasId);
         if (!canvas) return;
@@ -112,11 +72,11 @@ window.chartInterop = {
 
         const normalized = (datasets || []).map(ds => ({
             ...ds,
-            parsing: { xAxisKey: 'x', yAxisKey: 'y' },
-            borderWidth: 2,
-            pointRadius: 0,
-            spanGaps: true,
-            tension: 0
+            parsing: ds.parsing || { xAxisKey: 'x', yAxisKey: 'y' },
+            borderWidth: ds.borderWidth ?? 2,
+            pointRadius: ds.pointRadius ?? 0,
+            spanGaps: ds.spanGaps ?? true,
+            tension: ds.tension ?? 0
         }));
 
         this.chart = new Chart(ctx, {
