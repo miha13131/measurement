@@ -163,7 +163,7 @@
         new("max", "MAX"),
         new("range", "RANGE (max-min)"),
         new("stddev", "STDDEV"),
-        new("share", "SHARE (%) — Pie")
+        new("share", "SHARE (%) — Pie (for P_avg_3P)")
     ];
 
     private string selectedSignal = "P_avg_3P";
@@ -343,12 +343,12 @@
             }
         }
 
-        if (IsSharePieMode)
+        if (selectedAggregation == "share")
         {
             var shareDistribution = BuildShareDistribution(rawSeries);
 
             await JS.InvokeVoidAsync(
-                "pieInterop.renderSharePieChart",
+                "chartInterop.renderPieChart",
                 "meterCompareCanvas",
                 shareDistribution.Select(x => x.Meter).ToArray(),
                 shareDistribution.Select(x => x.SharePercent).ToArray(),
@@ -357,10 +357,6 @@
             if (shareDistribution.Count == 0)
             {
                 status = "No data to calculate SHARE distribution.";
-            }
-            else
-            {
-                status = "SHARE pie is shown for P_avg_3P: Share_i = P_i / P_total * 100%.";
             }
 
             return;
