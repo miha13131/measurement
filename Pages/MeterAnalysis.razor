@@ -267,6 +267,12 @@
     private async Task OnAggregationChanged(ChangeEventArgs e)
     {
         selectedAggregation = e.Value?.ToString() ?? selectedAggregation;
+
+        if (selectedAggregation == "share" && selectedSignal != "P_avg_3P")
+        {
+            selectedSignal = "P_avg_3P";
+        }
+
         await DrawChart();
     }
 
