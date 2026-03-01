@@ -1,15 +1,22 @@
 window.chartInterop = {
     chart: null,
 
+    destroyCanvasChart: function (canvas) {
+        if (!canvas || typeof Chart === 'undefined') return;
+
+        const existing = Chart.getChart(canvas);
+        if (existing) {
+            existing.destroy();
+        }
+    },
+
     renderTimeSeriesChart: function (canvasId, points, label) {
         const canvas = document.getElementById(canvasId);
         if (!canvas) return;
 
         const ctx = canvas.getContext('2d');
 
-        if (this.chart) {
-            this.chart.destroy();
-        }
+        this.destroyCanvasChart(canvas);
 
         this.chart = new Chart(ctx, {
             type: 'line',
@@ -66,9 +73,7 @@ window.chartInterop = {
 
         const ctx = canvas.getContext('2d');
 
-        if (this.chart) {
-            this.chart.destroy();
-        }
+        this.destroyCanvasChart(canvas);
 
         const normalized = (datasets || []).map(ds => ({
             ...ds,
