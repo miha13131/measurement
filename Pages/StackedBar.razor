@@ -5,17 +5,17 @@
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
 
-<h3>Stacked Bar Chart: energy and power structure</h3>
+<h3>Skládaný sloupcový graf: energie a struktura výkonu</h3>
 
 <p style="margin-bottom:10px; max-width:1100px;">
-    Page demonstrates two scenarios: (1) integration of active power P into consumed energy E,
-    and (2) stacked comparison of active/reactive power structure.
+    Stránka ukazuje dva scénáře: (1) integraci činného výkonu P na spotřebovanou energii E,
+    a (2) skládané porovnání struktury činného a jalového výkonu.
 </p>
 
 <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
-    <button @onclick="LoadAndDraw">Load + Draw</button>
+    <button @onclick="LoadAndDraw">Načíst + vykreslit</button>
 
-    <label>Scenario:</label>
+    <label>Scénář:</label>
     <select @onchange="OnScenarioChanged" disabled="@(meters.Count == 0)">
         @foreach (var scenario in scenarios)
         {
@@ -23,7 +23,7 @@
         }
     </select>
 
-    <label>Roll-up:</label>
+    <label>Seskupení:</label>
     <select @onchange="OnRollupChanged" disabled="@(meters.Count == 0)">
         @foreach (var rollup in rollups)
         {
@@ -33,7 +33,7 @@
 
     <label>
         <input type="checkbox" checked="@isPercentMode" @onchange="OnPercentModeChanged" disabled="@(selectedScenario != "pq_structure")" />
-        100% stacked mode (for P/Q structure)
+        100% skládaný režim (pro strukturu P/Q)
     </label>
 </div>
 
@@ -42,7 +42,7 @@
 @if (meters.Count > 0)
 {
     <div style="margin-bottom:10px; padding:10px 12px; background:#f3f4f6; border:1px solid #d1d5db; display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
-        <strong>Selected sources in total: @meters.Count(m => m.Enabled)</strong>
+        <strong>Vybrané zdroje celkem: @meters.Count(m => m.Enabled)</strong>
         @foreach (var meter in meters)
         {
             <label style="display:inline-flex; align-items:center; gap:6px;">
@@ -90,22 +90,22 @@
 
     private readonly List<RollupOption> rollups =
     [
-        new("15m", "15 minutes", TimeSpan.FromMinutes(15)),
-        new("1h", "1 hour", TimeSpan.FromHours(1)),
-        new("8h", "8 hours (shift)", TimeSpan.FromHours(8)),
-        new("24h", "24 hours (day)", TimeSpan.FromHours(24))
+        new("15m", "15 minut", TimeSpan.FromMinutes(15)),
+        new("1h", "1 hodina", TimeSpan.FromHours(1)),
+        new("8h", "8 hodin (směna)", TimeSpan.FromHours(8)),
+        new("24h", "24 hodin (den)", TimeSpan.FromHours(24))
     ];
 
     private readonly List<ScenarioOption> scenarios =
     [
-        new("energy_p", "P -> E integration: EMI1 + EMI2 + EMI3"),
-        new("pq_structure", "P_avg_3P vs Q_avg_3Q structure (MAIN)")
+        new("energy_p", "Integrace P -> E: EMI1 + EMI2 + EMI3"),
+        new("pq_structure", "Struktura činného vs. jalového výkonu (MAIN)")
     ];
 
     private string selectedRollup = "1h";
     private string selectedScenario = "energy_p";
     private bool isPercentMode;
-    private string status = "Waiting…";
+    private string status = "Čekání…";
 
     private CeaZipStore? store;
     private readonly List<MeterData> meters = [];
@@ -223,7 +223,7 @@
     {
         if (meters.Count == 0)
         {
-            status = "No data loaded yet.";
+            status = "Data zatím nejsou načtena.";
             return;
         }
 
@@ -234,8 +234,8 @@
 
         if (buckets.Count == 0)
         {
-            status = "No data for current selection.";
-            await JS.InvokeVoidAsync("stackedBarInterop.renderStackedBarChart", "stackedBarCanvas", Array.Empty<string>(), Array.Empty<object>(), "No data", "Value", false);
+            status = "Pro aktuální výběr nejsou dostupná data.";
+            await JS.InvokeVoidAsync("stackedBarInterop.renderStackedBarChart", "stackedBarCanvas", Array.Empty<string>(), Array.Empty<object>(), "Bez dat", "Hodnota", false);
             return;
         }
 
@@ -260,7 +260,12 @@
         var datasets = seriesKeys
             .Select(k => new
             {
-                label = k,
+                label = k switch
+                {
+                    "P_avg_3P" => "Činný výkon",
+                    "Q_avg_3Q" => "Jalový výkon",
+                    _ => k
+                },
                 backgroundColor = palette.TryGetValue(k, out var c) ? c : "#6b7280",
                 data = buckets.Select(b => b.ValuesBySeries.TryGetValue(k, out var v) ? Math.Round(v, 3) : 0d).ToArray(),
                 stack = "total"
@@ -268,16 +273,16 @@
             .ToArray();
 
         var title = selectedScenario == "energy_p"
-            ? $"Integrated energy by source ({rollup.Label})"
-            : $"P/Q structure ({rollup.Label})";
+            ? $"Integrovaná energie podle zdroje ({rollup.Label})"
+            : $"Struktura P/Q ({rollup.Label})";
 
         var yAxis = selectedScenario == "energy_p"
-            ? "Energy [Wh]"
-            : (isPercentMode ? "Share [%]" : "Power [W / var]");
+            ? "Energie [Wh]"
+            : (isPercentMode ? "Podíl [%]" : "Výkon [W / var]");
 
         await JS.InvokeVoidAsync("stackedBarInterop.renderStackedBarChart", "stackedBarCanvas", labels, datasets, title, yAxis, isPercentMode);
 
-        status = $"Rendered {buckets.Count} stacked bars; scenario: {selectedScenario}; roll-up: {rollup.Label}.";
+        status = $"Vykresleno {buckets.Count} sloupců; scénář: {scenarios.FirstOrDefault(s => s.Key == selectedScenario)?.Label ?? selectedScenario}; seskupení: {rollup.Label}.";
     }
 
     private List<BucketValue> BuildEnergyBuckets(TimeSpan bucketSize)
