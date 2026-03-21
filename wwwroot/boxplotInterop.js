@@ -33,8 +33,8 @@
             animation: false,
             backgroundColor: '#f7f7f7',
             title: {
-                text: `Boxplot (${metricLabel || 'metric'})`,
-                subtext: `${metricLabel || 'metric'} distribution`,
+                text: `Krabicový graf (${metricLabel || 'metrika'})`,
+                subtext: `${metricLabel || 'metrika'} – rozdělení${onlyAboveThreshold ? ` • filtr P95 > ${Number(threshold || 0).toFixed(2)} ${thresholdUnit || ''}` : ''}`,
                 left: 'center',
                 textStyle: { fontSize: 28, fontWeight: 700 },
                 subtextStyle: { fontSize: 14, color: '#555' }
