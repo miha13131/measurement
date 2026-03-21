@@ -1,0 +1,362 @@
+﻿@page "/boxplot"
+@inject HttpClient Http
+@inject IJSRuntime JS
+
+@using DeviceMeasurementsApp.Models
+@using DeviceMeasurementsApp.Services
+
+<h3>Boxplot: Power quality (EN 50160)</h3>
+
+<p style="max-width:1100px; margin-bottom:10px;">
+    10-minute windows with percentile aggregation. Each box shows median (P50), quartiles (P25/P75),
+    whiskers (1.5×IQR), and outliers. Use <strong>P95 threshold</strong> to focus on problematic windows.
+</p>
+
+<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px;">
+    <button @onclick="LoadAndDraw">Load + Draw</button>
+
+    <label>Object:</label>
+    <select @onchange="OnRecChanged" disabled="@(!isLoaded)">
+        @foreach (var rec in recs)
+        {
+            <option value="@rec.Id" selected="@(rec.Id == selectedRecId)">@rec.Name</option>
+        }
+    </select>
+
+    <label>Metric:</label>
+    <select @onchange="OnMetricChanged" disabled="@(table == null)">
+        @foreach (var m in metrics)
+        {
+            <option value="@m.Key" selected="@(m.Key == selectedMetric)">@m.Label</option>
+        }
+    </select>
+
+    <label>P95 &gt;</label>
+    <input type="number" step="0.1" value="@thresholdText" @onchange="OnThresholdChanged" style="width:90px;" />
+    <span>@thresholdUnit</span>
+
+    <label>
+        <input type="checkbox" checked="@onlyAboveThreshold" @onchange="OnOnlyAboveThresholdChanged" />
+        Only windows above threshold
+    </label>
+</div>
+
+<p>@status</p>
+
+@if (windows.Count > 0)
+{
+    <div style="height:680px; border:1px solid #d6d9df; background:#fafafa; padding:8px;">
+        <div id="thdBoxplotChart" style="width:100%; height:100%;"></div>
+    </div>
+}
+
+@code {
+    private sealed record Rec(int Id, string Name);
+    private sealed record Metric(string Key, string Label, string Unit);
+
+    private sealed record WindowStats(
+        DateTime WindowStart,
+        double Min,
+        double Q1,
+        double Median,
+        double Q3,
+        double Max,
+        double P95,
+        double LowerWhisker,
+        double UpperWhisker,
+        List<double> Outliers);
+
+    private readonly List<Rec> recs =
+    [
+        new(58, "EMI1"),
+        new(60, "EMI2"),
+        new(59, "EMI3"),
+        new(1, "MAIN")
+    ];
+
+    private readonly List<Metric> metrics =
+    [
+        new("THDI_3ph_avg", "THDI avg 3-phase", "%"),
+        new("U_avg_U1", "Voltage L1 (U_avg_U1)", "V"),
+        new("I_avg_I1", "Current L1 (I_avg_I1)", "A")
+    ];
+
+    private readonly List<WindowStats> windows = [];
+
+    private CeaZipStore? store;
+    private UniArchTable? table;
+
+    private bool isLoaded;
+    private int selectedRecId = 58;
+    private string selectedMetric = "THDI_3ph_avg";
+    private double threshold = 8.0;
+    private bool onlyAboveThreshold;
+    private string status = "Waiting…";
+
+    private string thresholdText => threshold.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+    private string thresholdUnit => metrics.FirstOrDefault(m => m.Key == selectedMetric)?.Unit ?? string.Empty;
+
+    private async Task LoadAndDraw()
+    {
+        store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+        isLoaded = true;
+        await LoadTableAndDraw();
+    }
+
+    private async Task OnRecChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var recId))
+        {
+            selectedRecId = recId;
+            await LoadTableAndDraw();
+        }
+    }
+
+    private async Task OnMetricChanged(ChangeEventArgs e)
+    {
+        selectedMetric = e.Value?.ToString() ?? selectedMetric;
+        await RebuildAndDraw();
+    }
+
+    private async Task OnThresholdChanged(ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var value))
+        {
+            threshold = value;
+        }
+
+        await RebuildAndDraw();
+    }
+
+    private async Task OnOnlyAboveThresholdChanged(ChangeEventArgs e)
+    {
+        onlyAboveThreshold = (bool?)e.Value == true;
+        await RebuildAndDraw();
+    }
+
+    private async Task LoadTableAndDraw()
+    {
+        if (store == null)
+        {
+            return;
+        }
+
+        var archIds = store.GetArchIds(selectedRecId).ToList();
+        if (archIds.Count == 0)
+        {
+            status = "No archives found for selected object.";
+            windows.Clear();
+            await JS.InvokeVoidAsync("boxplotInterop.clear", "thdBoxplotChart");
+            return;
+        }
+
+        var archId = archIds.First();
+        var pack = store.GetBinPacks(selectedRecId, archId).FirstOrDefault();
+        if (pack == null)
+        {
+            status = "No data packs found.";
+            windows.Clear();
+            await JS.InvokeVoidAsync("boxplotInterop.clear", "thdBoxplotChart");
+            return;
+        }
+
+        var typeXml = store.ReadArchDefXml(selectedRecId, archId);
+        var columns = ArchDefParser.ParseColumns(typeXml);
+
+        table = UniArchTableParser.ParseMinuteTable(store.Read(pack.Entry), pack.TimeUtc.ToLocalTime(), periodMs: 60000, maxRows: 900);
+        table.Columns.Clear();
+        table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
+
+        await RebuildAndDraw();
+    }
+
+    private async Task RebuildAndDraw()
+    {
+        windows.Clear();
+
+        if (table == null)
+        {
+            return;
+        }
+
+        var columnIndex = ResolveColumnIndex(selectedMetric);
+        if (!columnIndex.HasValue)
+        {
+            var fallback = FindClosestColumnIndex(selectedMetric);
+            if (fallback.HasValue)
+            {
+                columnIndex = fallback;
+                status = $"Metric '{selectedMetric}' was not matched exactly. Using '{table.Columns[fallback.Value].Name}'.";
+            }
+            else
+            {
+                status = $"Column '{selectedMetric}' not found.";
+                await JS.InvokeVoidAsync("boxplotInterop.clear", "thdBoxplotChart");
+                return;
+            }
+        }
+
+        windows.AddRange(BuildWindowStats(columnIndex.Value, 10));
+
+        var filtered = onlyAboveThreshold
+            ? windows.Where(w => w.P95 > threshold).ToList()
+            : windows.ToList();
+
+        await JS.InvokeVoidAsync(
+            "boxplotInterop.renderReadable",
+            "thdBoxplotChart",
+            filtered.Select(w => w.WindowStart.ToString("MM-dd HH:mm")).ToArray(),
+            filtered.Select(w => new[] { w.LowerWhisker, w.Q1, w.Median, w.Q3, w.UpperWhisker }).ToArray(),
+            filtered.SelectMany((w, idx) => w.Outliers.Select(v => new object[] { idx, v })).ToArray(),
+            selectedMetric,
+            threshold,
+            thresholdUnit,
+            onlyAboveThreshold);
+
+        var exceedCount = windows.Count(w => w.P95 > threshold);
+        status = filtered.Count == 0
+            ? $"No windows after filter: P95 > {threshold:0.###} {thresholdUnit}."
+            : $"Windows: {filtered.Count}/{windows.Count}. Above threshold P95 > {threshold:0.###} {thresholdUnit}: {exceedCount}.";
+    }
+
+    private int? ResolveColumnIndex(string metricName)
+    {
+        if (table == null)
+        {
+            return null;
+        }
+
+        for (int i = 0; i < table.Columns.Count; i++)
+        {
+            if (string.Equals(table.Columns[i].Name, metricName, StringComparison.OrdinalIgnoreCase))
+            {
+                return i;
+            }
+        }
+
+        var normalizedMetric = NormalizeName(metricName);
+        for (int i = 0; i < table.Columns.Count; i++)
+        {
+            var normalizedColumn = NormalizeName(table.Columns[i].Name);
+            if (normalizedColumn == normalizedMetric || normalizedColumn.EndsWith(normalizedMetric, StringComparison.Ordinal))
+            {
+                return i;
+            }
+        }
+
+        return null;
+    }
+
+    private int? FindClosestColumnIndex(string metricName)
+    {
+        if (table == null)
+        {
+            return null;
+        }
+
+        var tokens = NormalizeName(metricName)
+            .Split('_', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        for (int i = 0; i < table.Columns.Count; i++)
+        {
+            var normalizedColumn = NormalizeName(table.Columns[i].Name);
+            if (tokens.All(t => normalizedColumn.Contains(t, StringComparison.Ordinal)))
+            {
+                return i;
+            }
+        }
+
+        return null;
+    }
+
+    private IEnumerable<WindowStats> BuildWindowStats(int columnIndex, int windowSizeMinutes)
+    {
+        if (table == null)
+        {
+            yield break;
+        }
+
+        var pairs = table.Time
+            .Zip(table.Rows, (t, row) => new { Time = t, Value = columnIndex < row.Length ? row[columnIndex] : double.NaN })
+            .Where(x => !double.IsNaN(x.Value) && !double.IsInfinity(x.Value))
+            .OrderBy(x => x.Time)
+            .ToList();
+
+        if (pairs.Count == 0)
+        {
+            yield break;
+        }
+
+        var currentStart = AlignToWindow(pairs[0].Time, windowSizeMinutes);
+        var bucket = new List<double>();
+
+        foreach (var pair in pairs)
+        {
+            var windowStart = AlignToWindow(pair.Time, windowSizeMinutes);
+            if (windowStart != currentStart)
+            {
+                if (bucket.Count > 0)
+                {
+                    yield return ComputeWindow(currentStart, bucket);
+                }
+
+                bucket = [];
+                currentStart = windowStart;
+            }
+
+            bucket.Add(pair.Value);
+        }
+
+        if (bucket.Count > 0)
+        {
+            yield return ComputeWindow(currentStart, bucket);
+        }
+    }
+
+    private static WindowStats ComputeWindow(DateTime windowStart, List<double> values)
+    {
+        values.Sort();
+
+        var q1 = Percentile(values, 0.25);
+        var median = Percentile(values, 0.50);
+        var q3 = Percentile(values, 0.75);
+        var p95 = Percentile(values, 0.95);
+
+        var iqr = q3 - q1;
+        var lowerFence = q1 - 1.5 * iqr;
+        var upperFence = q3 + 1.5 * iqr;
+
+        var inRange = values.Where(v => v >= lowerFence && v <= upperFence).ToList();
+        var lowerWhisker = inRange.Count > 0 ? inRange.Min() : values.First();
+        var upperWhisker = inRange.Count > 0 ? inRange.Max() : values.Last();
+        var outliers = values.Where(v => v < lowerWhisker || v > upperWhisker).ToList();
+
+        return new WindowStats(windowStart, values.First(), q1, median, q3, values.Last(), p95, lowerWhisker, upperWhisker, outliers);
+    }
+
+    private static double Percentile(List<double> sorted, double p)
+    {
+        if (sorted.Count == 0) return double.NaN;
+        if (sorted.Count == 1) return sorted[0];
+
+        var position = (sorted.Count - 1) * p;
+        var left = (int)Math.Floor(position);
+        var right = (int)Math.Ceiling(position);
+
+        if (left == right) return sorted[left];
+
+        var fraction = position - left;
+        return sorted[left] + (sorted[right] - sorted[left]) * fraction;
+    }
+
+    private static DateTime AlignToWindow(DateTime time, int windowSizeMinutes)
+    {
+        var alignedMinute = (time.Minute / windowSizeMinutes) * windowSizeMinutes;
+        return new DateTime(time.Year, time.Month, time.Day, time.Hour, alignedMinute, 0, time.Kind);
+    }
+
+    private static string NormalizeName(string value)
+    {
+        return string.Concat(value.Where(ch => char.IsLetterOrDigit(ch) || ch == '_')).ToUpperInvariant();
+    }
+}
