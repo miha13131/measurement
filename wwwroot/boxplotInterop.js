@@ -34,7 +34,7 @@
             backgroundColor: '#f7f7f7',
             title: {
                 text: `Boxplot (${metricLabel || 'metric'})`,
-                subtext: `${metricLabel || 'metric'} distribution${onlyAboveThreshold ? ` • filtered by P95 > ${Number(threshold || 0).toFixed(2)} ${thresholdUnit || ''}` : ''}`,
+                subtext: `${metricLabel || 'metric'} distribution`,
                 left: 'center',
                 textStyle: { fontSize: 28, fontWeight: 700 },
                 subtextStyle: { fontSize: 14, color: '#555' }
@@ -65,7 +65,7 @@
                     show: true,
                     lineStyle: { color: '#e5e7eb', type: 'dashed' }
                 },
-                name: 'Time windows',
+                name: 'Časová okna',
                 nameLocation: 'middle',
                 nameGap: 58,
                 nameTextStyle: { fontSize: 15, fontWeight: 600 }
@@ -84,7 +84,7 @@
                 splitLine: {
                     lineStyle: { color: '#d1d5db' }
                 },
-                name: `${metricLabel || 'Value'}${thresholdUnit ? ` (${thresholdUnit})` : ''}`,
+                name: `${metricLabel || 'Hodnota'}${thresholdUnit ? ` (${thresholdUnit})` : ''}`,
                 nameLocation: 'middle',
                 nameGap: 58,
                 nameTextStyle: { fontSize: 15, fontWeight: 600 }
@@ -95,7 +95,7 @@
             ],
             series: [
                 {
-                    name: 'Distribution',
+                    name: 'Rozdělení',
                     type: 'boxplot',
                     data: safeBoxes,
                     itemStyle: {
@@ -117,7 +117,7 @@
                     boxWidth: [16, 32]
                 },
                 {
-                    name: 'Outliers',
+                    name: 'Odlehlé hodnoty',
                     type: 'scatter',
                     data: safeOutliers,
                     symbolSize: 7,
