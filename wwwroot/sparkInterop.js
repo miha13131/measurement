@@ -1,4 +1,4 @@
-window.sparkInterop = {
+﻿window.sparkInterop = {
     chart: null,
     resizeHandler: null,
 
@@ -187,8 +187,16 @@ window.sparkInterop = {
         if (this.resizeHandler) {
             window.removeEventListener('resize', this.resizeHandler);
         }
-
         this.resizeHandler = () => chart.resize();
         window.addEventListener('resize', this.resizeHandler);
     }
 };
+ё < div class="nav-item px-3" >
+    <NavLink class="nav-link" href="meter-analysis">
+        <span class="bi bi-bar-chart-line-fill-nav-menu" aria-hidden="true"></span> Meter analysis
+    </NavLink>
+        </div > <div class="nav-item px-3">
+    <NavLink class="nav-link" href="meter-analysis">
+        <span class="bi bi-bar-chart-line-fill-nav-menu" aria-hidden="true"></span> Meter analysis
+    </NavLink>
+</div>
