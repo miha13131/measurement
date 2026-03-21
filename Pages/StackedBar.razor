@@ -1,0 +1,437 @@
+@page "/stacked-bar"
+@inject HttpClient Http
+@inject IJSRuntime JS
+
+@using DeviceMeasurementsApp.Models
+@using DeviceMeasurementsApp.Services
+
+<h3>Stacked Bar Chart: energy and power structure</h3>
+
+<p style="margin-bottom:10px; max-width:1100px;">
+    Page demonstrates two scenarios: (1) integration of active power P into consumed energy E,
+    and (2) stacked comparison of active/reactive power structure.
+</p>
+
+<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+    <button @onclick="LoadAndDraw">Load + Draw</button>
+
+    <label>Scenario:</label>
+    <select @onchange="OnScenarioChanged" disabled="@(meters.Count == 0)">
+        @foreach (var scenario in scenarios)
+        {
+            <option value="@scenario.Key" selected="@(scenario.Key == selectedScenario)">@scenario.Label</option>
+        }
+    </select>
+
+    <label>Roll-up:</label>
+    <select @onchange="OnRollupChanged" disabled="@(meters.Count == 0)">
+        @foreach (var rollup in rollups)
+        {
+            <option value="@rollup.Key" selected="@(rollup.Key == selectedRollup)">@rollup.Label</option>
+        }
+    </select>
+
+    <label>
+        <input type="checkbox" checked="@isPercentMode" @onchange="OnPercentModeChanged" disabled="@(selectedScenario != "pq_structure")" />
+        100% stacked mode (for P/Q structure)
+    </label>
+</div>
+
+<p>@status</p>
+
+@if (meters.Count > 0)
+{
+    <div style="margin-bottom:10px; padding:10px 12px; background:#f3f4f6; border:1px solid #d1d5db; display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+        <strong>Selected sources in total: @meters.Count(m => m.Enabled)</strong>
+        @foreach (var meter in meters)
+        {
+            <label style="display:inline-flex; align-items:center; gap:6px;">
+                <input type="checkbox"
+                       checked="@meter.Enabled"
+                       @onchange="(e => ToggleSource(meter.Id, (bool?)e.Value == true))" />
+                @meter.Name
+            </label>
+        }
+    </div>
+
+    <div style="height:680px; border:1px solid #d6d9df; background:#fafafa; padding:8px;">
+        <canvas id="stackedBarCanvas"></canvas>
+    </div>
+}
+
+@code {
+    private sealed record Rec(int Id, string Name);
+    private sealed record RollupOption(string Key, string Label, TimeSpan BucketSize);
+    private sealed record ScenarioOption(string Key, string Label);
+
+    private sealed class MeterData
+    {
+        public int Id { get; init; }
+        public string Name { get; init; } = string.Empty;
+        public bool Enabled { get; set; } = true;
+        public required UniArchTable Table { get; init; }
+        public required Dictionary<string, int> IndexByName { get; init; }
+        public required Dictionary<string, int> NormalizedIndexByName { get; init; }
+    }
+
+    private sealed class BucketValue
+    {
+        public required DateTime BucketStart { get; init; }
+        public required Dictionary<string, double> ValuesBySeries { get; init; }
+    }
+
+    private readonly List<Rec> recs =
+    [
+        new(58, "EMI1"),
+        new(60, "EMI2"),
+        new(59, "EMI3"),
+        new(1, "MAIN")
+    ];
+
+    private readonly List<RollupOption> rollups =
+    [
+        new("15m", "15 minutes", TimeSpan.FromMinutes(15)),
+        new("1h", "1 hour", TimeSpan.FromHours(1)),
+        new("8h", "8 hours (shift)", TimeSpan.FromHours(8)),
+        new("24h", "24 hours (day)", TimeSpan.FromHours(24))
+    ];
+
+    private readonly List<ScenarioOption> scenarios =
+    [
+        new("energy_p", "P -> E integration: EMI1 + EMI2 + EMI3"),
+        new("pq_structure", "P_avg_3P vs Q_avg_3Q structure (MAIN)")
+    ];
+
+    private string selectedRollup = "1h";
+    private string selectedScenario = "energy_p";
+    private bool isPercentMode;
+    private string status = "Waiting…";
+
+    private CeaZipStore? store;
+    private readonly List<MeterData> meters = [];
+
+    private async Task LoadAndDraw()
+    {
+        store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+
+        meters.Clear();
+
+        foreach (var rec in recs)
+        {
+            var meter = TryLoadMeter(rec);
+            if (meter != null)
+            {
+                if (meter.Name == "MAIN")
+                {
+                    meter.Enabled = false;
+                }
+                meters.Add(meter);
+            }
+        }
+
+        await DrawChart();
+    }
+
+    private MeterData? TryLoadMeter(Rec rec)
+    {
+        if (store == null)
+        {
+            return null;
+        }
+
+        var archIds = store.GetArchIds(rec.Id).ToList();
+        if (archIds.Count == 0)
+        {
+            return null;
+        }
+
+        var archId = archIds.First();
+        var pack = store.GetBinPacks(rec.Id, archId).FirstOrDefault();
+        if (pack == null)
+        {
+            return null;
+        }
+
+        var typeXml = store.ReadArchDefXml(rec.Id, archId);
+        var columns = ArchDefParser.ParseColumns(typeXml);
+
+        var table = UniArchTableParser.ParseMinuteTable(
+            store.Read(pack.Entry),
+            pack.TimeUtc.ToLocalTime(),
+            periodMs: 60000,
+            maxRows: 500);
+
+        table.Columns.Clear();
+        table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
+
+        var indexByName = table.Columns
+            .Select((c, i) => new { c.Name, Index = i })
+            .GroupBy(x => x.Name)
+            .ToDictionary(g => g.Key, g => g.First().Index, StringComparer.OrdinalIgnoreCase);
+
+        var normalizedIndexByName = table.Columns
+            .Select((c, i) => new { Name = NormalizeName(c.Name), Index = i })
+            .GroupBy(x => x.Name)
+            .ToDictionary(g => g.Key, g => g.First().Index, StringComparer.OrdinalIgnoreCase);
+
+        return new MeterData
+        {
+            Id = rec.Id,
+            Name = rec.Name,
+            Table = table,
+            IndexByName = indexByName,
+            NormalizedIndexByName = normalizedIndexByName
+        };
+    }
+
+    private async Task OnScenarioChanged(ChangeEventArgs e)
+    {
+        selectedScenario = e.Value?.ToString() ?? selectedScenario;
+        if (selectedScenario != "pq_structure")
+        {
+            isPercentMode = false;
+        }
+
+        await DrawChart();
+    }
+
+    private async Task OnRollupChanged(ChangeEventArgs e)
+    {
+        selectedRollup = e.Value?.ToString() ?? selectedRollup;
+        await DrawChart();
+    }
+
+    private async Task OnPercentModeChanged(ChangeEventArgs e)
+    {
+        isPercentMode = (bool?)e.Value == true;
+        await DrawChart();
+    }
+
+    private async Task ToggleSource(int meterId, bool enabled)
+    {
+        var meter = meters.FirstOrDefault(m => m.Id == meterId);
+        if (meter == null)
+        {
+            return;
+        }
+
+        meter.Enabled = enabled;
+        await DrawChart();
+    }
+
+    private async Task DrawChart()
+    {
+        if (meters.Count == 0)
+        {
+            status = "No data loaded yet.";
+            return;
+        }
+
+        var rollup = rollups.First(x => x.Key == selectedRollup);
+        var buckets = selectedScenario == "energy_p"
+            ? BuildEnergyBuckets(rollup.BucketSize)
+            : BuildPowerStructureBuckets(rollup.BucketSize, isPercentMode);
+
+        if (buckets.Count == 0)
+        {
+            status = "No data for current selection.";
+            await JS.InvokeVoidAsync("stackedBarInterop.renderStackedBarChart", "stackedBarCanvas", Array.Empty<string>(), Array.Empty<object>(), "No data", "Value", false);
+            return;
+        }
+
+        var labels = buckets
+            .Select(b => b.BucketStart.ToString("dd.MM HH:mm"))
+            .ToArray();
+
+        var seriesKeys = buckets
+            .SelectMany(b => b.ValuesBySeries.Keys)
+            .Distinct()
+            .ToList();
+
+        var palette = new Dictionary<string, string>
+        {
+            ["EMI1"] = "#2f7ed8",
+            ["EMI2"] = "#8bbc21",
+            ["EMI3"] = "#910000",
+            ["P_avg_3P"] = "#2563eb",
+            ["Q_avg_3Q"] = "#f97316"
+        };
+
+        var datasets = seriesKeys
+            .Select(k => new
+            {
+                label = k,
+                backgroundColor = palette.TryGetValue(k, out var c) ? c : "#6b7280",
+                data = buckets.Select(b => b.ValuesBySeries.TryGetValue(k, out var v) ? Math.Round(v, 3) : 0d).ToArray(),
+                stack = "total"
+            })
+            .ToArray();
+
+        var title = selectedScenario == "energy_p"
+            ? $"Integrated energy by source ({rollup.Label})"
+            : $"P/Q structure ({rollup.Label})";
+
+        var yAxis = selectedScenario == "energy_p"
+            ? "Energy [Wh]"
+            : (isPercentMode ? "Share [%]" : "Power [W / var]");
+
+        await JS.InvokeVoidAsync("stackedBarInterop.renderStackedBarChart", "stackedBarCanvas", labels, datasets, title, yAxis, isPercentMode);
+
+        status = $"Rendered {buckets.Count} stacked bars; scenario: {selectedScenario}; roll-up: {rollup.Label}.";
+    }
+
+    private List<BucketValue> BuildEnergyBuckets(TimeSpan bucketSize)
+    {
+        var selectedMeters = meters.Where(m => m.Enabled).ToList();
+        var map = new Dictionary<DateTime, Dictionary<string, double>>();
+
+        foreach (var meter in selectedMeters)
+        {
+            var series = BuildSignalPoints(meter, "P_avg_3P").OrderBy(x => x.Time).ToList();
+            if (series.Count == 0)
+            {
+                continue;
+            }
+
+            DateTime? previousTime = null;
+            foreach (var point in series)
+            {
+                var dtHours = previousTime.HasValue
+                    ? Math.Max((point.Time - previousTime.Value).TotalHours, 1d / 60d)
+                    : 1d / 60d;
+
+                previousTime = point.Time;
+
+                var bucket = AlignToBucket(point.Time, bucketSize);
+                if (!map.TryGetValue(bucket, out var bySeries))
+                {
+                    bySeries = new Dictionary<string, double>();
+                    map[bucket] = bySeries;
+                }
+
+                bySeries.TryGetValue(meter.Name, out var current);
+                bySeries[meter.Name] = current + Math.Max(point.Value, 0d) * dtHours;
+            }
+        }
+
+        return map
+            .OrderBy(kvp => kvp.Key)
+            .Select(kvp => new BucketValue { BucketStart = kvp.Key, ValuesBySeries = kvp.Value })
+            .ToList();
+    }
+
+    private List<BucketValue> BuildPowerStructureBuckets(TimeSpan bucketSize, bool percentMode)
+    {
+        var selectedMeters = meters.Where(m => m.Enabled).ToList();
+        if (selectedMeters.Count == 0)
+        {
+            return [];
+        }
+
+        var merged = selectedMeters
+            .SelectMany(m => BuildSignalPoints(m, "P_avg_3P").Select(x => new { Meter = m.Name, x.Time, P = x.Value }))
+            .GroupBy(x => x.Time)
+            .ToDictionary(g => g.Key, g => g.Sum(v => v.P));
+
+        var mergedQ = selectedMeters
+            .SelectMany(m => BuildSignalPoints(m, "Q_avg_3Q").Select(x => new { Meter = m.Name, x.Time, Q = x.Value }))
+            .GroupBy(x => x.Time)
+            .ToDictionary(g => g.Key, g => g.Sum(v => v.Q));
+
+        var grouped = merged.Keys
+            .Intersect(mergedQ.Keys)
+            .GroupBy(t => AlignToBucket(t, bucketSize))
+            .OrderBy(g => g.Key)
+            .ToList();
+
+        var result = new List<BucketValue>();
+
+        foreach (var g in grouped)
+        {
+            var pAvg = g.Select(t => merged[t]).DefaultIfEmpty(0).Average();
+            var qAvg = g.Select(t => mergedQ[t]).DefaultIfEmpty(0).Average();
+
+            if (percentMode)
+            {
+                var denom = Math.Abs(pAvg) + Math.Abs(qAvg);
+                if (denom > 0)
+                {
+                    pAvg = (Math.Abs(pAvg) / denom) * 100d;
+                    qAvg = (Math.Abs(qAvg) / denom) * 100d;
+                }
+                else
+                {
+                    pAvg = 0;
+                    qAvg = 0;
+                }
+            }
+
+            result.Add(new BucketValue
+            {
+                BucketStart = g.Key,
+                ValuesBySeries = new Dictionary<string, double>
+                {
+                    ["P_avg_3P"] = pAvg,
+                    ["Q_avg_3Q"] = qAvg
+                }
+            });
+        }
+
+        return result;
+    }
+
+    private IEnumerable<(DateTime Time, double Value)> BuildSignalPoints(MeterData meter, string signal)
+    {
+        int count = Math.Min(meter.Table.Time.Count, meter.Table.Rows.Count);
+        var idx = ResolveColumnIndex(meter, signal);
+        if (!idx.HasValue)
+        {
+            yield break;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            if (idx.Value >= meter.Table.Rows[i].Length)
+            {
+                continue;
+            }
+
+            yield return (meter.Table.Time[i], meter.Table.Rows[i][idx.Value]);
+        }
+    }
+
+    private static DateTime AlignToBucket(DateTime time, TimeSpan bucket)
+    {
+        if (bucket <= TimeSpan.Zero)
+        {
+            return time;
+        }
+
+        long ticks = time.Ticks - (time.Ticks % bucket.Ticks);
+        return new DateTime(ticks, time.Kind);
+    }
+
+    private int? ResolveColumnIndex(MeterData meter, string name)
+    {
+        if (meter.IndexByName.TryGetValue(name, out var exact))
+        {
+            return exact;
+        }
+
+        var normalized = NormalizeName(name);
+        if (meter.NormalizedIndexByName.TryGetValue(normalized, out var normalizedIndex))
+        {
+            return normalizedIndex;
+        }
+
+        var fallback = meter.NormalizedIndexByName
+            .FirstOrDefault(kvp => kvp.Key.EndsWith(normalized, StringComparison.OrdinalIgnoreCase));
+
+        return fallback.Equals(default(KeyValuePair<string, int>)) ? null : fallback.Value;
+    }
+
+    private static string NormalizeName(string value)
+    {
+        return string.Concat(value.Where(ch => char.IsLetterOrDigit(ch) || ch == '_')).ToUpperInvariant();
+    }
+}
