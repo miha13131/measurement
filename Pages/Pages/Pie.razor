@@ -707,7 +707,7 @@
             "I_avg_mean" => Average(meter, rowIndex, "I_avg_I1", "I_avg_I2", "I_avg_I3"),
             "P_to_S_ratio" => RatioPercent(meter, rowIndex, "P_avg_3P", "S_avg_3S"),
             "THDI_3ph_avg" => Average(meter, rowIndex, "Harmonics/THDI_avg_THDI1", "Harmonics/THDI_avg_THDI2", "Harmonics/THDI_avg_THDI3"),
-            "U_phase_imbalance" => Range(meter, rowIndex, "U_avg_U1", "U_avg_U2", "U_avg_U3"),
+            "U_phase_imbalance" => VoltageImbalancePercent(meter, rowIndex, "U_avg_U1", "U_avg_U2", "U_avg_U3"),
             "S_from_PQ" => SFromPQ(meter, rowIndex),
             "Q_to_P_ratio" => RatioPercent(meter, rowIndex, "Q_avg_3Q", "P_avg_3P"),
             "PQ_incident_flag" => PQIncidentFlag(meter, rowIndex),
@@ -794,7 +794,7 @@
         return values.Length == 0 ? null : values.Average();
     }
 
-    private double? Range(MeterData meter, int rowIndex, params string[] names)
+    private double? VoltageImbalancePercent(MeterData meter, int rowIndex, params string[] names)
     {
         var values = names
             .Select(name => Single(meter, rowIndex, name))
@@ -802,7 +802,19 @@
             .Select(v => v!.Value)
             .ToArray();
 
-        return values.Length == 0 ? null : values.Max() - values.Min();
+        if (values.Length == 0)
+        {
+            return null;
+        }
+
+        var avg = values.Average();
+        if (Math.Abs(avg) < 0.000001)
+        {
+            return null;
+        }
+
+        var diff = values.Max() - values.Min();
+        return (diff / avg) * 100d;
     }
 
     private double? RatioPercent(MeterData meter, int rowIndex, string numeratorName, string denominatorName)
