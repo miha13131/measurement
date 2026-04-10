@@ -1,0 +1,362 @@
+@page "/sunburst"
+@inject HttpClient Http
+@inject IJSRuntime JS
+
+@using DeviceMeasurementsApp.Models
+@using DeviceMeasurementsApp.Services
+
+<h3>Sunburst: podíl zdrojů (pouze vhodné agregace)</h3>
+
+<p style="max-width:1000px; margin-bottom:10px;">
+    Sunburst zde používá pouze podílové agregace. Příspěvek zdrojů lze počítat z
+    integrované energie, průměrného výkonu, špičkových hodnot i z odhadované ceny.
+    Pro cenu je použit koeficient <strong>8.5 Kč/kWh</strong>.
+</p>
+
+<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+    <button @onclick="LoadAndDraw">Load + Draw</button>
+
+    <label>Základ agregace:</label>
+    <select @onchange="OnBasisChanged" disabled="@(meters.Count == 0)">
+        @foreach (var basis in aggregationBases)
+        {
+            <option value="@basis.Key" selected="@(basis.Key == selectedBasis)">@basis.Label</option>
+        }
+    </select>
+</div>
+
+@if (meters.Count > 0)
+{
+    <div style="margin-bottom:10px; padding:10px 12px; background:#f3f4f6; border:1px solid #d1d5db; display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+        <strong>Vybrané zdroje celkem: @meters.Count(m => m.Enabled)</strong>
+        @foreach (var meter in meters)
+        {
+            <label style="display:inline-flex; align-items:center; gap:6px;">
+                <input type="checkbox" checked="@meter.Enabled" @onchange="(e => ToggleSource(meter.Id, (bool?)e.Value == true))" />
+                @meter.Name
+            </label>
+        }
+    </div>
+}
+
+<p>@status</p>
+
+@if (meters.Count > 0)
+{
+    <div id="sunburstChart" style="height:680px; border:1px solid #d6d9df; background:#fafafa; padding:8px;"></div>
+}
+
+@code {
+    private sealed record Rec(int Id, string Name);
+    private sealed record AggregationBasis(string Key, string Label);
+
+    private sealed class MeterData
+    {
+        public int Id { get; init; }
+        public string Name { get; init; } = string.Empty;
+        public bool Enabled { get; set; } = true;
+        public required UniArchTable Table { get; init; }
+        public required Dictionary<string, int> IndexByName { get; init; }
+        public required Dictionary<string, int> NormalizedIndexByName { get; init; }
+    }
+
+    private readonly List<Rec> recs =
+    [
+        new(58, "EMI1"),
+        new(60, "EMI2"),
+        new(59, "EMI3"),
+        new(1, "MAIN")
+    ];
+
+    private readonly List<AggregationBasis> aggregationBases =
+    [
+        new("energy_p_share", "Podíl podle integrované aktivní energie Σ(P·Δt)"),
+        new("energy_q_share", "Podíl podle integrované jalové energie Σ(Q·Δt)"),
+        new("power_avg_p_share", "Podíl podle průměrného aktivního výkonu AVG(P_avg_3P)"),
+        new("power_avg_kw_share", "Podíl podle průměrného výkonu v kW AVG(P_avg_3P/1000)"),
+        new("power_avg_s_share", "Podíl podle průměrného zdánlivého výkonu AVG(S_avg_3S)"),
+        new("power_peak_p_share", "Podíl podle špičky aktivního výkonu MAX(P_avg_3P)"),
+        new("cost_energy_share", "Podíl podle odhadované ceny z energie (Σ(P·Δt) × 8.5/1000)"),
+        new("cost_hour_share", "Podíl podle odhadované hodinové ceny ((AVG(P)/1000) × 8.5)")
+    ];
+
+    private string selectedBasis = "energy_p_share";
+    private string status = "Čekám…";
+
+    private CeaZipStore? store;
+    private readonly List<MeterData> meters = [];
+
+    private async Task LoadAndDraw()
+    {
+        store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+
+        meters.Clear();
+
+        foreach (var rec in recs)
+        {
+            var meter = TryLoadMeter(rec);
+            if (meter != null)
+            {
+                if (meter.Name == "MAIN")
+                {
+                    meter.Enabled = false;
+                }
+                meters.Add(meter);
+            }
+        }
+
+        await DrawSunburst();
+    }
+
+    private MeterData? TryLoadMeter(Rec rec)
+    {
+        if (store == null)
+        {
+            return null;
+        }
+
+        var archIds = store.GetArchIds(rec.Id).ToList();
+        if (archIds.Count == 0)
+        {
+            return null;
+        }
+
+        var archId = archIds.First();
+        var pack = store.GetBinPacks(rec.Id, archId).FirstOrDefault();
+        if (pack == null)
+        {
+            return null;
+        }
+
+        var typeXml = store.ReadArchDefXml(rec.Id, archId);
+        var columns = ArchDefParser.ParseColumns(typeXml);
+
+        var table = UniArchTableParser.ParseMinuteTable(
+            store.Read(pack.Entry),
+            pack.TimeUtc.ToLocalTime(),
+            periodMs: 60000,
+            maxRows: 500);
+
+        table.Columns.Clear();
+        table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
+
+        var indexByName = table.Columns
+            .Select((c, i) => new { c.Name, Index = i })
+            .GroupBy(x => x.Name)
+            .ToDictionary(g => g.Key, g => g.First().Index, StringComparer.OrdinalIgnoreCase);
+
+        var normalizedIndexByName = table.Columns
+            .Select((c, i) => new { Name = NormalizeName(c.Name), Index = i })
+            .GroupBy(x => x.Name)
+            .ToDictionary(g => g.Key, g => g.First().Index, StringComparer.OrdinalIgnoreCase);
+
+        return new MeterData
+        {
+            Id = rec.Id,
+            Name = rec.Name,
+            Table = table,
+            IndexByName = indexByName,
+            NormalizedIndexByName = normalizedIndexByName
+        };
+    }
+
+    private async Task ToggleSource(int meterId, bool enabled)
+    {
+        var meter = meters.FirstOrDefault(m => m.Id == meterId);
+        if (meter == null)
+        {
+            return;
+        }
+
+        meter.Enabled = enabled;
+        await DrawSunburst();
+    }
+
+    private async Task OnBasisChanged(ChangeEventArgs e)
+    {
+        selectedBasis = e.Value?.ToString() ?? selectedBasis;
+        await DrawSunburst();
+    }
+
+    private async Task DrawSunburst()
+    {
+        var selectedMeters = meters.Where(m => m.Enabled).ToList();
+        if (selectedMeters.Count == 0)
+        {
+            status = "Vyberte alespoň jeden zdroj.";
+            await JS.InvokeVoidAsync("sunburstInterop.renderSunburst", "sunburstChart", "Bez dat", Array.Empty<object>(), "");
+            return;
+        }
+
+        var totals = selectedMeters
+            .Select(m => (m.Name, Value: CalculateBasisValue(m, selectedBasis)))
+            .Where(x => !double.IsNaN(x.Value) && !double.IsInfinity(x.Value) && x.Value > 0)
+            .ToList();
+
+        var total = totals.Sum(x => x.Value);
+        if (total <= 0)
+        {
+            status = "Není dost kladných hodnot pro vytvoření podílu v sunburstu.";
+            await JS.InvokeVoidAsync("sunburstInterop.renderSunburst", "sunburstChart", "Bez dat", Array.Empty<object>(), "");
+            return;
+        }
+
+        var rawUnit = GetRawUnit(selectedBasis);
+        var children = totals
+            .OrderByDescending(x => x.Value)
+            .Select(x => new
+            {
+                name = x.Name,
+                value = Math.Round((x.Value / total) * 100d, 3),
+                rawValue = Math.Round(x.Value, 3),
+                rawUnit
+            })
+            .ToArray();
+
+        var data = new object[]
+        {
+            new
+            {
+                name = "Celkem",
+                children
+            }
+        };
+
+        var title = selectedBasis switch
+        {
+            "energy_p_share" => "Sunburst: podíl podle integrované aktivní energie [%]",
+            "energy_q_share" => "Sunburst: podíl podle integrované jalové energie [%]",
+            "power_avg_p_share" => "Sunburst: podíl podle průměrného aktivního výkonu [%]",
+            "power_avg_kw_share" => "Sunburst: podíl podle průměrného výkonu v kW [%]",
+            "power_avg_s_share" => "Sunburst: podíl podle průměrného zdánlivého výkonu [%]",
+            "power_peak_p_share" => "Sunburst: podíl podle špičky aktivního výkonu [%]",
+            "cost_energy_share" => "Sunburst: podíl podle odhadované ceny z energie [%]",
+            "cost_hour_share" => "Sunburst: podíl podle odhadované hodinové ceny [%]",
+            _ => "Sunburst: podíl [%]"
+        };
+
+        await JS.InvokeVoidAsync("sunburstInterop.renderSunburst", "sunburstChart", title, data, rawUnit);
+
+        status = $"Vykresleno pro {children.Length} zdrojů, agregace: {selectedBasis}.";
+    }
+
+    private double CalculateBasisValue(MeterData meter, string basisKey)
+    {
+        return basisKey switch
+        {
+            "energy_p_share" => CalculateEnergyIntegral(meter, "P_avg_3P"),
+            "energy_q_share" => CalculateEnergyIntegral(meter, "Q_avg_3Q"),
+            "power_avg_p_share" => CalculateAverageSignal(meter, "P_avg_3P"),
+            "power_avg_kw_share" => CalculateAverageSignal(meter, "P_avg_3P") / 1000d,
+            "power_avg_s_share" => CalculateAverageSignal(meter, "S_avg_3S"),
+            "power_peak_p_share" => CalculatePeakSignal(meter, "P_avg_3P"),
+            "cost_energy_share" => (CalculateEnergyIntegral(meter, "P_avg_3P") / 1000d) * 8.5d,
+            "cost_hour_share" => (CalculateAverageSignal(meter, "P_avg_3P") / 1000d) * 8.5d,
+            _ => CalculateEnergyIntegral(meter, "P_avg_3P")
+        };
+    }
+
+    private static string GetRawUnit(string basisKey)
+    {
+        return basisKey switch
+        {
+            "energy_p_share" => "Wh",
+            "energy_q_share" => "varh",
+            "power_avg_p_share" => "W",
+            "power_avg_kw_share" => "kW",
+            "power_avg_s_share" => "VA",
+            "power_peak_p_share" => "W",
+            "cost_energy_share" => "Kč",
+            "cost_hour_share" => "Kč/h",
+            _ => ""
+        };
+    }
+
+    private double CalculateEnergyIntegral(MeterData meter, string signal)
+    {
+        var points = BuildSignalPoints(meter, signal).OrderBy(p => p.Time).ToList();
+        if (points.Count == 0)
+        {
+            return 0;
+        }
+
+        double totalWh = 0;
+        DateTime? previousTime = null;
+
+        foreach (var point in points)
+        {
+            var dtHours = previousTime.HasValue
+                ? Math.Max((point.Time - previousTime.Value).TotalHours, 1d / 60d)
+                : 1d / 60d;
+
+            previousTime = point.Time;
+            totalWh += Math.Max(point.Value, 0) * dtHours;
+        }
+
+        return totalWh;
+    }
+
+    private double CalculateAverageSignal(MeterData meter, string signal)
+    {
+        var values = BuildSignalPoints(meter, signal)
+            .Select(x => x.Value)
+            .Where(v => !double.IsNaN(v) && !double.IsInfinity(v) && v > 0)
+            .ToList();
+
+        return values.Count == 0 ? 0 : values.Average();
+    }
+
+    private double CalculatePeakSignal(MeterData meter, string signal)
+    {
+        var values = BuildSignalPoints(meter, signal)
+            .Select(x => x.Value)
+            .Where(v => !double.IsNaN(v) && !double.IsInfinity(v) && v > 0)
+            .ToList();
+
+        return values.Count == 0 ? 0 : values.Max();
+    }
+
+    private IEnumerable<(DateTime Time, double Value)> BuildSignalPoints(MeterData meter, string signal)
+    {
+        int count = Math.Min(meter.Table.Time.Count, meter.Table.Rows.Count);
+        var idx = ResolveColumnIndex(meter, signal);
+        if (!idx.HasValue)
+        {
+            yield break;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            if (idx.Value >= meter.Table.Rows[i].Length)
+            {
+                continue;
+            }
+
+            yield return (meter.Table.Time[i], meter.Table.Rows[i][idx.Value]);
+        }
+    }
+
+    private int? ResolveColumnIndex(MeterData meter, string name)
+    {
+        if (meter.IndexByName.TryGetValue(name, out var exact))
+        {
+            return exact;
+        }
+
+        var normalized = NormalizeName(name);
+        if (meter.NormalizedIndexByName.TryGetValue(normalized, out var normalizedIndex))
+        {
+            return normalizedIndex;
+        }
+
+        var fallback = meter.NormalizedIndexByName
+            .FirstOrDefault(kvp => kvp.Key.EndsWith(normalized, StringComparison.OrdinalIgnoreCase));
+
+        return fallback.Equals(default(KeyValuePair<string, int>)) ? null : fallback.Value;
+    }
+
+    private static string NormalizeName(string value)
+    {
+        return string.Concat(value.Where(ch => char.IsLetterOrDigit(ch) || ch == '_')).ToUpperInvariant();
+    }
+}
