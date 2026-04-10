@@ -9,7 +9,8 @@
 
 <p style="max-width:1000px; margin-bottom:10px;">
     Sunburst zde používá pouze podílové agregace. Příspěvek zdrojů lze počítat z
-    integrované energie, průměrného výkonu nebo špičkových hodnot.
+    integrované energie, průměrného výkonu, špičkových hodnot i z odhadované ceny.
+    Pro cenu je použit koeficient <strong>8.5 Kč/kWh</strong>.
 </p>
 
 <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
@@ -72,8 +73,11 @@
         new("energy_p_share", "Podíl podle integrované aktivní energie Σ(P·Δt)"),
         new("energy_q_share", "Podíl podle integrované jalové energie Σ(Q·Δt)"),
         new("power_avg_p_share", "Podíl podle průměrného aktivního výkonu AVG(P_avg_3P)"),
+        new("power_avg_kw_share", "Podíl podle průměrného výkonu v kW AVG(P_avg_3P/1000)"),
         new("power_avg_s_share", "Podíl podle průměrného zdánlivého výkonu AVG(S_avg_3S)"),
-        new("power_peak_p_share", "Podíl podle špičky aktivního výkonu MAX(P_avg_3P)")
+        new("power_peak_p_share", "Podíl podle špičky aktivního výkonu MAX(P_avg_3P)"),
+        new("cost_energy_share", "Podíl podle odhadované ceny z energie (Σ(P·Δt) × 8.5/1000)"),
+        new("cost_hour_share", "Podíl podle odhadované hodinové ceny ((AVG(P)/1000) × 8.5)")
     ];
 
     private string selectedBasis = "energy_p_share";
@@ -220,8 +224,11 @@
             "energy_p_share" => "Sunburst: podíl podle integrované aktivní energie [%]",
             "energy_q_share" => "Sunburst: podíl podle integrované jalové energie [%]",
             "power_avg_p_share" => "Sunburst: podíl podle průměrného aktivního výkonu [%]",
+            "power_avg_kw_share" => "Sunburst: podíl podle průměrného výkonu v kW [%]",
             "power_avg_s_share" => "Sunburst: podíl podle průměrného zdánlivého výkonu [%]",
             "power_peak_p_share" => "Sunburst: podíl podle špičky aktivního výkonu [%]",
+            "cost_energy_share" => "Sunburst: podíl podle odhadované ceny z energie [%]",
+            "cost_hour_share" => "Sunburst: podíl podle odhadované hodinové ceny [%]",
             _ => "Sunburst: podíl [%]"
         };
 
@@ -237,8 +244,11 @@
             "energy_p_share" => CalculateEnergyIntegral(meter, "P_avg_3P"),
             "energy_q_share" => CalculateEnergyIntegral(meter, "Q_avg_3Q"),
             "power_avg_p_share" => CalculateAverageSignal(meter, "P_avg_3P"),
+            "power_avg_kw_share" => CalculateAverageSignal(meter, "P_avg_3P") / 1000d,
             "power_avg_s_share" => CalculateAverageSignal(meter, "S_avg_3S"),
             "power_peak_p_share" => CalculatePeakSignal(meter, "P_avg_3P"),
+            "cost_energy_share" => (CalculateEnergyIntegral(meter, "P_avg_3P") / 1000d) * 8.5d,
+            "cost_hour_share" => (CalculateAverageSignal(meter, "P_avg_3P") / 1000d) * 8.5d,
             _ => CalculateEnergyIntegral(meter, "P_avg_3P")
         };
     }
