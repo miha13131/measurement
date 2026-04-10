@@ -54,7 +54,7 @@ window.stackedBarInterop = {
                         max: isPercentMode ? 100 : undefined,
                         title: {
                             display: true,
-                            text: yAxisLabel || 'Hodnota'
+                            text: yAxisLabel || 'Value'
                         }
                     }
                 }
