@@ -5,17 +5,17 @@
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
 
-<h3>Boxplot: Power quality (EN 50160)</h3>
+<h3>Krabicový graf: Kvalita napětí (EN 50160)</h3>
 
 <p style="max-width:1100px; margin-bottom:10px;">
-    10-minute windows with percentile aggregation. Each box shows median (P50), quartiles (P25/P75),
-    whiskers (1.5×IQR), and outliers. Use <strong>P95 threshold</strong> to focus on problematic windows.
+    10minutová okna s percentilovou agregací. Každý box zobrazuje medián (P50), kvartily (P25/P75),
+    vousy (1,5×IQR) a odlehlé hodnoty. Prah <strong>P95</strong> pomáhá zvýraznit problémová okna.
 </p>
 
 <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px;">
-    <button @onclick="LoadAndDraw">Load + Draw</button>
+    <button @onclick="LoadAndDraw">Načíst + vykreslit</button>
 
-    <label>Object:</label>
+    <label>Objekt:</label>
     <select @onchange="OnRecChanged" disabled="@(!isLoaded)">
         @foreach (var rec in recs)
         {
@@ -23,7 +23,7 @@
         }
     </select>
 
-    <label>Metric:</label>
+    <label>Metrika:</label>
     <select @onchange="OnMetricChanged" disabled="@(table == null)">
         @foreach (var m in metrics)
         {
@@ -37,11 +37,9 @@
 
     <label>
         <input type="checkbox" checked="@onlyAboveThreshold" @onchange="OnOnlyAboveThresholdChanged" />
-        Only windows above threshold
+        Pouze okna nad prahem
     </label>
 </div>
-
-<p>@status</p>
 
 @if (windows.Count > 0)
 {
@@ -76,9 +74,9 @@
 
     private readonly List<Metric> metrics =
     [
-        new("THDI_3ph_avg", "THDI avg 3-phase", "%"),
-        new("U_avg_U1", "Voltage L1 (U_avg_U1)", "V"),
-        new("I_avg_I1", "Current L1 (I_avg_I1)", "A")
+        new("THDI_3ph_avg", "THDI průměr (3 fáze)", "%"),
+        new("U_avg_U1", "Napětí L1", "V"),
+        new("I_avg_I1", "Proud L1", "A")
     ];
 
     private readonly List<WindowStats> windows = [];
@@ -91,7 +89,7 @@
     private string selectedMetric = "THDI_3ph_avg";
     private double threshold = 8.0;
     private bool onlyAboveThreshold;
-    private string status = "Waiting…";
+    private string status = "Čekání…";
 
     private string thresholdText => threshold.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
     private string thresholdUnit => metrics.FirstOrDefault(m => m.Key == selectedMetric)?.Unit ?? string.Empty;
@@ -144,7 +142,7 @@
         var archIds = store.GetArchIds(selectedRecId).ToList();
         if (archIds.Count == 0)
         {
-            status = "No archives found for selected object.";
+            status = "Pro vybraný objekt nebyly nalezeny archivy.";
             windows.Clear();
             await JS.InvokeVoidAsync("boxplotInterop.clear", "thdBoxplotChart");
             return;
@@ -154,7 +152,7 @@
         var pack = store.GetBinPacks(selectedRecId, archId).FirstOrDefault();
         if (pack == null)
         {
-            status = "No data packs found.";
+            status = "Nebyly nalezeny datové balíčky.";
             windows.Clear();
             await JS.InvokeVoidAsync("boxplotInterop.clear", "thdBoxplotChart");
             return;
@@ -186,11 +184,11 @@
             if (fallback.HasValue)
             {
                 columnIndex = fallback;
-                status = $"Metric '{selectedMetric}' was not matched exactly. Using '{table.Columns[fallback.Value].Name}'.";
+                status = $"Metrika '{selectedMetric}' nebyla nalezena přesně. Používám '{table.Columns[fallback.Value].Name}'.";
             }
             else
             {
-                status = $"Column '{selectedMetric}' not found.";
+                status = $"Sloupec '{selectedMetric}' nebyl nalezen.";
                 await JS.InvokeVoidAsync("boxplotInterop.clear", "thdBoxplotChart");
                 return;
             }
@@ -208,15 +206,15 @@
             filtered.Select(w => w.WindowStart.ToString("MM-dd HH:mm")).ToArray(),
             filtered.Select(w => new[] { w.LowerWhisker, w.Q1, w.Median, w.Q3, w.UpperWhisker }).ToArray(),
             filtered.SelectMany((w, idx) => w.Outliers.Select(v => new object[] { idx, v })).ToArray(),
-            selectedMetric,
+            metrics.FirstOrDefault(m => m.Key == selectedMetric)?.Label ?? selectedMetric,
             threshold,
             thresholdUnit,
             onlyAboveThreshold);
 
         var exceedCount = windows.Count(w => w.P95 > threshold);
         status = filtered.Count == 0
-            ? $"No windows after filter: P95 > {threshold:0.###} {thresholdUnit}."
-            : $"Windows: {filtered.Count}/{windows.Count}. Above threshold P95 > {threshold:0.###} {thresholdUnit}: {exceedCount}.";
+            ? $"Po filtrování nezůstala žádná okna: P95 > {threshold:0.###} {thresholdUnit}."
+            : $"Oken: {filtered.Count}/{windows.Count}. Nad prahem P95 > {threshold:0.###} {thresholdUnit}: {exceedCount}.";
     }
 
     private int? ResolveColumnIndex(string metricName)
