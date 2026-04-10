@@ -45,7 +45,7 @@
                     },
                     title: {
                         display: true,
-                        text: title || 'Share by source (%)'
+                        text: title || 'Podíl podle zdroje (%)'
                     },
                     tooltip: {
                         callbacks: {
