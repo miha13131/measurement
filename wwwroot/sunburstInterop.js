@@ -42,9 +42,18 @@ window.sunburstInterop = {
                 label: {
                     rotate: 'radial',
                     color: '#ffffff',
+                    fontSize: 18,
+                    fontWeight: 700,
+                    textBorderColor: 'rgba(0,0,0,0.35)',
+                    textBorderWidth: 2,
                     formatter: function (params) {
                         const rawValue = Number(params?.data?.rawValue ?? NaN);
                         const unit = params?.data?.rawUnit || rawUnit || '';
+                        const name = params?.data?.name || '';
+
+                        if (name === 'Celkem' && !Number.isNaN(rawValue)) {
+                            return `Celkem\n${compact(rawValue)} ${unit}`;
+                        }
 
                         if (!Number.isNaN(rawValue)) {
                             return `${compact(rawValue)} ${unit}`;
@@ -61,11 +70,29 @@ window.sunburstInterop = {
                     r0: '20%',
                     r: '55%',
                     itemStyle: { borderWidth: 2 },
-                    label: { rotate: 0 }
+                    label: {
+                        rotate: 0,
+                        color: '#ffffff',
+                        fontSize: 22,
+                        fontWeight: 700,
+                        textBorderColor: 'rgba(0,0,0,0.35)',
+                        textBorderWidth: 2
+                    }
                 }, {
                     r0: '55%',
                     r: '92%',
-                    label: { align: 'right' }
+                    label: {
+                        align: 'right',
+                        color: '#ffffff',
+                        fontSize: 20,
+                        fontWeight: 700,
+                        textBorderColor: 'rgba(0,0,0,0.35)',
+                        textBorderWidth: 2
+                    },
+                    itemStyle: {
+                        borderColor: 'rgba(255,255,255,0.75)',
+                        borderWidth: 2
+                    }
                 }]
             }
         };

@@ -204,12 +204,16 @@
         var rawUnit = GetRawUnit(selectedBasis);
         var children = totals
             .OrderByDescending(x => x.Value)
-            .Select(x => new
+            .Select((x, idx) => new
             {
                 name = x.Name,
                 value = Math.Round((x.Value / total) * 100d, 3),
                 rawValue = Math.Round(x.Value, 3),
-                rawUnit
+                rawUnit,
+                itemStyle = new
+                {
+                    color = GreenPalette[idx % GreenPalette.Length]
+                }
             })
             .ToArray();
 
@@ -218,6 +222,13 @@
             new
             {
                 name = "Celkem",
+                value = 100d,
+                rawValue = Math.Round(total, 3),
+                rawUnit,
+                itemStyle = new
+                {
+                    color = "#6FAF5F"
+                },
                 children
             }
         };
@@ -271,6 +282,15 @@
             _ => ""
         };
     }
+
+    private static readonly string[] GreenPalette =
+    [
+        "#6FAF5F",
+        "#7FBB6F",
+        "#8FC67F",
+        "#9FD18F",
+        "#AEDB9F"
+    ];
 
     private double CalculateEnergyIntegral(MeterData meter, string signal)
     {
