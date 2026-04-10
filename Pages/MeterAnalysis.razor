@@ -16,7 +16,7 @@
     <strong>Useful aggregation examples:</strong>
     <ul style="margin:6px 0 0 18px;">
         <li><strong>P_avg_3P + SUM</strong> — total active power across selected meters (overall site load).</li>
-        <li><strong>U_phase_imbalance + MAX</strong> — worst phase voltage imbalance at each timestamp.</li>
+        <li><strong>U_phase_imbalance + MAX</strong> — worst phase voltage imbalance [%] at each timestamp.</li>
         <li><strong>THDI_3ph_avg + AVG</strong> — average current harmonic level across meters.</li>
         <li><strong>P_avg_3P + SHARE</strong> — source contribution pie by formula Share_i = P_i / P_total × 100%.</li>
     </ul>
@@ -59,8 +59,6 @@
         }
     </div>
 }
-
-<p>@status</p>
 
 @if (meters.Count > 0)
 {
@@ -146,7 +144,7 @@
         new("Cos_3Cosφ", "Cos φ total (Cos_3Cosφ)", "Cos φ"),
         new("f_avg_f", "Frequency (f_avg_f)", "Frequency [Hz]"),
         new("THDI_3ph_avg", "THDI avg 3-phase ((THDI1+THDI2+THDI3)/3)", "THDI [%]"),
-        new("U_phase_imbalance", "Voltage phase imbalance (max(U1,U2,U3)-min(...))", "Voltage imbalance [V]"),
+        new("U_phase_imbalance", "Voltage phase imbalance ((max-min)/avg * 100)", "Voltage imbalance [%]"),
         new("P_to_S_ratio", "Power loading ratio (P_avg_3P / S_avg_3S * 100)", "Loading [%]"),
         new("U_avg_U1", "Voltage L1 (U_avg_U1)", "Voltage [V]"),
         new("U_avg_U2", "Voltage L2 (U_avg_U2)", "Voltage [V]"),
@@ -498,7 +496,7 @@
             "U_avg_LL" => Average(meter, rowIndex, "U_avg_U12", "U_avg_U23", "U_avg_U31"),
             "I_avg_mean" => Average(meter, rowIndex, "I_avg_I1", "I_avg_I2", "I_avg_I3"),
             "THDI_3ph_avg" => Average(meter, rowIndex, "Harmonics/THDI_avg_THDI1", "Harmonics/THDI_avg_THDI2", "Harmonics/THDI_avg_THDI3"),
-            "U_phase_imbalance" => Range(meter, rowIndex, "U_avg_U1", "U_avg_U2", "U_avg_U3"),
+            "U_phase_imbalance" => VoltageImbalancePercent(meter, rowIndex, "U_avg_U1", "U_avg_U2", "U_avg_U3"),
             "P_to_S_ratio" => RatioPercent(meter, rowIndex, "P_avg_3P", "S_avg_3S"),
             _ => Single(meter, rowIndex, selectedSignal)
         };
@@ -556,7 +554,7 @@
     }
 
 
-    private double? Range(MeterData meter, int rowIndex, params string[] names)
+    private double? VoltageImbalancePercent(MeterData meter, int rowIndex, params string[] names)
     {
         var values = names
             .Select(name => Single(meter, rowIndex, name))
@@ -564,7 +562,19 @@
             .Select(v => v!.Value)
             .ToArray();
 
-        return values.Length == 0 ? null : values.Max() - values.Min();
+        if (values.Length == 0)
+        {
+            return null;
+        }
+
+        var avg = values.Average();
+        if (Math.Abs(avg) < 0.000001)
+        {
+            return null;
+        }
+
+        var diff = values.Max() - values.Min();
+        return (diff / avg) * 100d;
     }
 
     private double? RatioPercent(MeterData meter, int rowIndex, string numeratorName, string denominatorName)
