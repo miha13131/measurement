@@ -2,7 +2,7 @@ window.sunburstInterop = {
     chart: null,
     resizeHandler: null,
 
-    renderSunburst: function (divId, title, data) {
+    renderSunburst: function (divId, title, data, rawUnit) {
         const el = document.getElementById(divId);
         if (!el || typeof echarts === 'undefined') return;
 
@@ -23,8 +23,15 @@ window.sunburstInterop = {
             tooltip: {
                 trigger: 'item',
                 formatter: function (params) {
-                    const v = Number(params.value || 0);
-                    return `${params.name}: ${v.toFixed(2)}%`;
+                    const share = Number(params.value || 0);
+                    const rawValue = Number(params?.data?.rawValue ?? NaN);
+                    const unit = params?.data?.rawUnit || rawUnit || '';
+
+                    if (!Number.isNaN(rawValue)) {
+                        return `${params.name}: ${rawValue.toFixed(2)} ${unit}<br/>Podíl: ${share.toFixed(2)}%`;
+                    }
+
+                    return `${params.name}: ${share.toFixed(2)}%`;
                 }
             },
             series: {
@@ -32,6 +39,21 @@ window.sunburstInterop = {
                 radius: ["20%", "92%"],
                 sort: null,
                 data: data || [],
+                label: {
+                    rotate: 'radial',
+                    color: '#ffffff',
+                    formatter: function (params) {
+                        const rawValue = Number(params?.data?.rawValue ?? NaN);
+                        const unit = params?.data?.rawUnit || rawUnit || '';
+
+                        if (!Number.isNaN(rawValue)) {
+                            return `${compact(rawValue)} ${unit}`;
+                        }
+
+                        const share = Number(params.value || 0);
+                        return `${share.toFixed(1)}%`;
+                    }
+                },
                 emphasis: {
                     focus: 'ancestor'
                 },
@@ -56,5 +78,12 @@ window.sunburstInterop = {
 
         this.resizeHandler = () => this.chart && this.chart.resize();
         window.addEventListener('resize', this.resizeHandler);
+
+        function compact(value) {
+            const abs = Math.abs(value);
+            if (abs >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
+            if (abs >= 1000) return `${(value / 1000).toFixed(1)}K`;
+            return value.toFixed(1);
+        }
     }
 };

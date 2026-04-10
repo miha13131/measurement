@@ -184,7 +184,7 @@
         if (selectedMeters.Count == 0)
         {
             status = "Vyberte alespoň jeden zdroj.";
-            await JS.InvokeVoidAsync("sunburstInterop.renderSunburst", "sunburstChart", "Bez dat", Array.Empty<object>());
+            await JS.InvokeVoidAsync("sunburstInterop.renderSunburst", "sunburstChart", "Bez dat", Array.Empty<object>(), "");
             return;
         }
 
@@ -197,16 +197,19 @@
         if (total <= 0)
         {
             status = "Není dost kladných hodnot pro vytvoření podílu v sunburstu.";
-            await JS.InvokeVoidAsync("sunburstInterop.renderSunburst", "sunburstChart", "Bez dat", Array.Empty<object>());
+            await JS.InvokeVoidAsync("sunburstInterop.renderSunburst", "sunburstChart", "Bez dat", Array.Empty<object>(), "");
             return;
         }
 
+        var rawUnit = GetRawUnit(selectedBasis);
         var children = totals
             .OrderByDescending(x => x.Value)
             .Select(x => new
             {
                 name = x.Name,
-                value = Math.Round((x.Value / total) * 100d, 3)
+                value = Math.Round((x.Value / total) * 100d, 3),
+                rawValue = Math.Round(x.Value, 3),
+                rawUnit
             })
             .ToArray();
 
@@ -232,7 +235,7 @@
             _ => "Sunburst: podíl [%]"
         };
 
-        await JS.InvokeVoidAsync("sunburstInterop.renderSunburst", "sunburstChart", title, data);
+        await JS.InvokeVoidAsync("sunburstInterop.renderSunburst", "sunburstChart", title, data, rawUnit);
 
         status = $"Vykresleno pro {children.Length} zdrojů, agregace: {selectedBasis}.";
     }
@@ -250,6 +253,22 @@
             "cost_energy_share" => (CalculateEnergyIntegral(meter, "P_avg_3P") / 1000d) * 8.5d,
             "cost_hour_share" => (CalculateAverageSignal(meter, "P_avg_3P") / 1000d) * 8.5d,
             _ => CalculateEnergyIntegral(meter, "P_avg_3P")
+        };
+    }
+
+    private static string GetRawUnit(string basisKey)
+    {
+        return basisKey switch
+        {
+            "energy_p_share" => "Wh",
+            "energy_q_share" => "varh",
+            "power_avg_p_share" => "W",
+            "power_avg_kw_share" => "kW",
+            "power_avg_s_share" => "VA",
+            "power_peak_p_share" => "W",
+            "cost_energy_share" => "Kč",
+            "cost_hour_share" => "Kč/h",
+            _ => ""
         };
     }
 
