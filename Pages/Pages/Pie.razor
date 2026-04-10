@@ -5,16 +5,16 @@
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
 
-<h3>Interactive Share calculator</h3>
+<h3>Interaktivní kalkulačka podílů</h3>
 
 <p style="margin-bottom:10px; max-width:1100px;">
-    Share(t) = Metric_i(t) / ΣMetric_j(t) × 100%. Supports what-if thresholds and custom windows.
+    Podíl(t) = Metrika_i(t) / ΣMetrika_j(t) × 100 %. Podpora vlastních časových oken.
 </p>
 
 <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-    <button @onclick="LoadAndDraw">Load + Draw</button>
+    <button @onclick="LoadAndDraw">Načíst + vykreslit</button>
 
-    <label>Metric:</label>
+    <label>Metrika:</label>
     <select @onchange="OnMetricChanged" disabled="@(meters.Count == 0 || IsSpecialAgg)">
         @foreach (var m in metricOptions)
         {
@@ -22,7 +22,7 @@
         }
     </select>
 
-    <label>Agg mode:</label>
+    <label>Režim agregace:</label>
     <select @onchange="OnAggChanged" disabled="@(meters.Count == 0)">
         @foreach (var a in aggregationOptions)
         {
@@ -30,54 +30,28 @@
         }
     </select>
 
-    <button @onclick="AddWindow" disabled="@(meters.Count == 0)">+ Add window</button>
-    <button @onclick="DrawAll" disabled="@(meters.Count == 0)">Recalculate</button>
+    <button @onclick="AddWindow" disabled="@(meters.Count == 0)">+ Přidat okno</button>
+    <button @onclick="DrawAll" disabled="@(meters.Count == 0)">Přepočítat</button>
 </div>
-
-@if (!IsSpecialAgg)
-{
-    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:10px; border:1px solid #e5e7eb; padding:8px; background:#fafafa;">
-        <label>
-            <input type="checkbox" checked="@useTotalThreshold" @onchange="OnUseTotalThresholdChanged" />
-            Filter total > X
-        </label>
-        <label>X:</label>
-        <input type="number" step="0.1" value="@totalThreshold" @onchange="OnTotalThresholdChanged" style="width:110px;" />
-
-        <label>
-            <input type="checkbox" checked="@useShareThreshold" @onchange="OnUseShareThresholdChanged" />
-            Count intervals Share(source) > Y
-        </label>
-        <label>Source:</label>
-        <select @onchange="OnMonitoredSourceChanged" disabled="@(meters.Count == 0)">
-            @foreach (var s in AvailableSources)
-            {
-                <option value="@s" selected="@(s == monitoredSource)">@s</option>
-            }
-        </select>
-        <label>Y%:</label>
-        <input type="number" step="0.1" value="@shareThresholdPercent" @onchange="OnShareThresholdChanged" style="width:90px;" />
-    </div>
-}
 
 @if (meters.Count > 0)
 {
     <div style="margin-bottom:10px; border:1px solid #d6d9df; background:#fafafa; padding:10px;">
-        <strong>Time windows:</strong>
+        <strong>Časová okna:</strong>
 
         @foreach (var window in windows)
         {
             <div @key="window.Id" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">
-                <label>Title:</label>
+                <label>Název:</label>
                 <input style="min-width:120px;" @bind="window.Title" @bind:event="oninput" />
 
-                <label>From:</label>
+                <label>Od:</label>
                 <input type="datetime-local" @bind="window.From" />
 
-                <label>To:</label>
+                <label>Do:</label>
                 <input type="datetime-local" @bind="window.To" />
 
-                <button @onclick="(() => RemoveWindow(window.Id))" disabled="@(windows.Count <= 1)">Remove</button>
+                <button @onclick="(() => RemoveWindow(window.Id))" disabled="@(windows.Count <= 1)">Odebrat</button>
             </div>
         }
     </div>
@@ -86,7 +60,7 @@
 @if (meters.Count > 0)
 {
     <div style="margin-bottom:10px;">
-        <strong>Selected sources in total:</strong>
+        <strong>Vybrané zdroje celkem:</strong>
         @foreach (var meter in meters)
         {
             <label style="margin-right:12px; margin-left:8px;">
@@ -96,8 +70,6 @@
         }
     </div>
 }
-
-<p>@status</p>
 
 @if (meters.Count > 0)
 {
@@ -113,17 +85,17 @@
 
 @if (tableRows.Count > 0)
 {
-    <h5>Result table</h5>
+    <h5>Tabulka výsledků</h5>
     <div style="overflow:auto; max-height:340px; border:1px solid #ddd; background:white;">
         <table class="table table-sm table-striped" style="margin-bottom:0;">
             <thead>
                 <tr>
-                    <th>Window</th>
-                    <th>From</th>
-                    <th>To</th>
-                    <th>Item</th>
-                    <th>Aggregated</th>
-                    <th>Share %</th>
+                    <th>Okno</th>
+                    <th>Od</th>
+                    <th>Do</th>
+                    <th>Položka</th>
+                    <th>Agregace</th>
+                    <th>Podíl %</th>
                 </tr>
             </thead>
             <tbody>
@@ -145,15 +117,15 @@
 
 @if (whatIfRows.Count > 0)
 {
-    <h5 style="margin-top:10px;">What-if results</h5>
+    <h5 style="margin-top:10px;">Výsledky podmínek</h5>
     <div style="overflow:auto; max-height:240px; border:1px solid #ddd; background:white;">
         <table class="table table-sm table-striped" style="margin-bottom:0;">
             <thead>
                 <tr>
-                    <th>Window</th>
-                    <th>Condition</th>
-                    <th>Intervals</th>
-                    <th>Minutes</th>
+                    <th>Okno</th>
+                    <th>Podmínka</th>
+                    <th>Intervaly</th>
+                    <th>Minuty</th>
                 </tr>
             </thead>
             <tbody>
@@ -206,22 +178,22 @@
 
     private readonly List<MetricOption> metricOptions =
     [
-        new("P_avg_3P", "Active power total (P_avg_3P)"),
-        new("S_avg_3S", "Apparent power total (S_avg_3S)"),
-        new("Q_avg_3Q", "Reactive power total (Q_avg_3Q)"),
-        new("I_avg_mean", "Current avg 3-phase ((I1+I2+I3)/3)"),
-        new("P_to_S_ratio", "Power loading ratio (P_avg_3P / S_avg_3S * 100)"),
-        new("S_from_PQ", "Apparent from P/Q (sqrt(P^2 + Q^2))"),
-        new("Q_to_P_ratio", "Reactive-to-active ratio (|Q| / P * 100)"),
-        new("PQ_incident_flag", "PQ incident flag (THD>8 or sag or imbalance)")
+        new("P_avg_3P", "Činný výkon celkem"),
+        new("S_avg_3S", "Zdánlivý výkon celkem"),
+        new("Q_avg_3Q", "Jalový výkon celkem"),
+        new("I_avg_mean", "Proud – průměr 3 fází"),
+        new("P_to_S_ratio", "Poměr zatížení výkonu (P/S)"),
+        new("S_from_PQ", "Zdánlivý výkon z P/Q"),
+        new("Q_to_P_ratio", "Poměr jalového ku činnému (|Q|/P)"),
+        new("PQ_incident_flag", "Příznak incidentu kvality energie")
     ];
 
     private readonly List<AggOption> aggregationOptions =
     [
-        new("sum", "SUM by source"),
-        new("avg", "AVG by source"),
-        new("count_if_pq", "Power quality breakdown (Count IF)"),
-        new("balance_pq", "Useful vs parasitic power balance")
+        new("sum", "Součet podle zdroje"),
+        new("avg", "Průměr podle zdroje"),
+        new("count_if_pq", "Rozklad kvality energie (COUNT IF)"),
+        new("balance_pq", "Bilance užitečného vs. parazitního výkonu")
     ];
 
     private string selectedMetric = "P_avg_3P";
@@ -238,7 +210,7 @@
     private readonly List<WindowConfig> windows = [];
     private readonly List<ShareTableRow> tableRows = [];
     private readonly List<WhatIfRow> whatIfRows = [];
-    private string status = "Waiting…";
+    private string status = "Čekání…";
 
     private bool IsSpecialAgg => selectedAgg is "count_if_pq" or "balance_pq";
     private IEnumerable<string> AvailableSources => meters.Select(m => m.Name);
@@ -279,7 +251,7 @@
         windows.Add(new WindowConfig
         {
             Id = Guid.NewGuid().ToString("N"),
-            Title = "Window 1",
+            Title = "Okno 1",
             From = latest.AddMinutes(-5),
             To = latest
         });
@@ -287,7 +259,7 @@
         windows.Add(new WindowConfig
         {
             Id = Guid.NewGuid().ToString("N"),
-            Title = "Window 2",
+            Title = "Okno 2",
             From = latest.AddMinutes(-30),
             To = latest
         });
@@ -300,7 +272,7 @@
         windows.Add(new WindowConfig
         {
             Id = Guid.NewGuid().ToString("N"),
-            Title = $"Window {windows.Count + 1}",
+            Title = $"Okno {windows.Count + 1}",
             From = latest.AddMinutes(-15),
             To = latest
         });
@@ -452,7 +424,7 @@
         var enabledMeters = meters.Where(m => m.Enabled).ToList();
         if (enabledMeters.Count == 0)
         {
-            status = "Select at least one source.";
+            status = "Vyberte alespoň jeden zdroj.";
             foreach (var w in windows)
             {
                 await RenderPie(GetCanvasId(w.Id), [], [], w.Title);
@@ -484,7 +456,7 @@
                 if (useShareThreshold)
                 {
                     var count = CountShareAboveThreshold(metricSeriesByMeter, allowedTimesWhatIf, monitoredSource, shareThresholdPercent);
-                    whatIfRows.Add(new WhatIfRow(title, $"Share({monitoredSource}) > {shareThresholdPercent:0.##}%", count, count));
+                    whatIfRows.Add(new WhatIfRow(title, $"Podíl({monitoredSource}) > {shareThresholdPercent:0.##} %", count, count));
                 }
             }
 
@@ -506,8 +478,8 @@
         }
 
         status = nonEmptyCount == 0
-            ? "No data for selected metric/range/source set."
-            : $"Rendered {nonEmptyCount}/{windows.Count} pie charts. Mode={selectedAgg}.";
+            ? "Pro vybranou metriku / interval / sadu zdrojů nejsou data."
+            : $"Vykresleno {nonEmptyCount}/{windows.Count} koláčových grafů. Režim: {aggregationOptions.FirstOrDefault(a => a.Key == selectedAgg)?.Label ?? selectedAgg}.";
     }
 
     private async Task RenderPie(string canvasId, string[] labels, double[] values, string title)
@@ -529,7 +501,7 @@
 
     private static string BuildWindowTitle(WindowConfig window, (DateTime From, DateTime To) range)
     {
-        var name = string.IsNullOrWhiteSpace(window.Title) ? "Window" : window.Title.Trim();
+        var name = string.IsNullOrWhiteSpace(window.Title) ? "Okno" : window.Title.Trim();
         return $"{name}: {range.From:MM-dd HH:mm}..{range.To:HH:mm}";
     }
 
@@ -665,9 +637,9 @@
         }
 
         return ToShares([
-            ("THD > 8%", thdCount),
-            ("Voltage sag < 0.9*Unom", sagCount),
-            ("Phase imbalance", imbalanceCount)
+            ("THD > 8 %", thdCount),
+            ("Pokles napětí < 0,9×Unom", sagCount),
+            ("Nesymetrie fází", imbalanceCount)
         ]);
     }
 
@@ -706,8 +678,8 @@
         }
 
         return ToShares([
-            ("Useful active P", Math.Max(sumP, 0d)),
-            ("Parasitic reactive Q", Math.Max(sumQ, 0d))
+            ("Užitečný činný výkon P", Math.Max(sumP, 0d)),
+            ("Parazitní jalový výkon Q", Math.Max(sumQ, 0d))
         ]);
     }
 
@@ -733,7 +705,7 @@
             "I_avg_mean" => Average(meter, rowIndex, "I_avg_I1", "I_avg_I2", "I_avg_I3"),
             "P_to_S_ratio" => RatioPercent(meter, rowIndex, "P_avg_3P", "S_avg_3S"),
             "THDI_3ph_avg" => Average(meter, rowIndex, "Harmonics/THDI_avg_THDI1", "Harmonics/THDI_avg_THDI2", "Harmonics/THDI_avg_THDI3"),
-            "U_phase_imbalance" => Range(meter, rowIndex, "U_avg_U1", "U_avg_U2", "U_avg_U3"),
+            "U_phase_imbalance" => VoltageImbalancePercent(meter, rowIndex, "U_avg_U1", "U_avg_U2", "U_avg_U3"),
             "S_from_PQ" => SFromPQ(meter, rowIndex),
             "Q_to_P_ratio" => RatioPercent(meter, rowIndex, "Q_avg_3Q", "P_avg_3P"),
             "PQ_incident_flag" => PQIncidentFlag(meter, rowIndex),
@@ -820,7 +792,7 @@
         return values.Length == 0 ? null : values.Average();
     }
 
-    private double? Range(MeterData meter, int rowIndex, params string[] names)
+    private double? VoltageImbalancePercent(MeterData meter, int rowIndex, params string[] names)
     {
         var values = names
             .Select(name => Single(meter, rowIndex, name))
@@ -828,7 +800,19 @@
             .Select(v => v!.Value)
             .ToArray();
 
-        return values.Length == 0 ? null : values.Max() - values.Min();
+        if (values.Length == 0)
+        {
+            return null;
+        }
+
+        var avg = values.Average();
+        if (Math.Abs(avg) < 0.000001)
+        {
+            return null;
+        }
+
+        var diff = values.Max() - values.Min();
+        return (diff / avg) * 100d;
     }
 
     private double? RatioPercent(MeterData meter, int rowIndex, string numeratorName, string denominatorName)
