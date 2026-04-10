@@ -5,17 +5,17 @@
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
 
-<h3>Sunburst: source share (only suitable aggregation)</h3>
+<h3>Sunburst: podíl zdrojů (pouze vhodné agregace)</h3>
 
 <p style="max-width:1000px; margin-bottom:10px;">
-    Sunburst is enabled only for share-style aggregations. Here we calculate source contribution either from
-    integrated active energy (<code>E = Σ(P·Δt)</code>) or from average active power.
+    Sunburst zde používá pouze podílové agregace. Příspěvek zdrojů lze počítat z
+    integrované energie, průměrného výkonu nebo špičkových hodnot.
 </p>
 
 <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
     <button @onclick="LoadAndDraw">Load + Draw</button>
 
-    <label>Aggregation basis:</label>
+    <label>Základ agregace:</label>
     <select @onchange="OnBasisChanged" disabled="@(meters.Count == 0)">
         @foreach (var basis in aggregationBases)
         {
@@ -27,7 +27,7 @@
 @if (meters.Count > 0)
 {
     <div style="margin-bottom:10px; padding:10px 12px; background:#f3f4f6; border:1px solid #d1d5db; display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
-        <strong>Selected sources in total: @meters.Count(m => m.Enabled)</strong>
+        <strong>Vybrané zdroje celkem: @meters.Count(m => m.Enabled)</strong>
         @foreach (var meter in meters)
         {
             <label style="display:inline-flex; align-items:center; gap:6px;">
@@ -69,12 +69,15 @@
 
     private readonly List<AggregationBasis> aggregationBases =
     [
-        new("energy_share", "Share by integrated energy Σ(P·Δt)"),
-        new("power_avg_share", "Share by average active power AVG(P_avg_3P)")
+        new("energy_p_share", "Podíl podle integrované aktivní energie Σ(P·Δt)"),
+        new("energy_q_share", "Podíl podle integrované jalové energie Σ(Q·Δt)"),
+        new("power_avg_p_share", "Podíl podle průměrného aktivního výkonu AVG(P_avg_3P)"),
+        new("power_avg_s_share", "Podíl podle průměrného zdánlivého výkonu AVG(S_avg_3S)"),
+        new("power_peak_p_share", "Podíl podle špičky aktivního výkonu MAX(P_avg_3P)")
     ];
 
-    private string selectedBasis = "energy_share";
-    private string status = "Waiting…";
+    private string selectedBasis = "energy_p_share";
+    private string status = "Čekám…";
 
     private CeaZipStore? store;
     private readonly List<MeterData> meters = [];
@@ -176,21 +179,21 @@
         var selectedMeters = meters.Where(m => m.Enabled).ToList();
         if (selectedMeters.Count == 0)
         {
-            status = "Select at least one source.";
-            await JS.InvokeVoidAsync("sunburstInterop.renderSunburst", "sunburstChart", "No data", Array.Empty<object>());
+            status = "Vyberte alespoň jeden zdroj.";
+            await JS.InvokeVoidAsync("sunburstInterop.renderSunburst", "sunburstChart", "Bez dat", Array.Empty<object>());
             return;
         }
 
         var totals = selectedMeters
-            .Select(m => (m.Name, Value: selectedBasis == "energy_share" ? CalculateEnergyIntegral(m) : CalculateAvgPower(m)))
+            .Select(m => (m.Name, Value: CalculateBasisValue(m, selectedBasis)))
             .Where(x => !double.IsNaN(x.Value) && !double.IsInfinity(x.Value) && x.Value > 0)
             .ToList();
 
         var total = totals.Sum(x => x.Value);
         if (total <= 0)
         {
-            status = "No positive values to build SHARE sunburst.";
-            await JS.InvokeVoidAsync("sunburstInterop.renderSunburst", "sunburstChart", "No data", Array.Empty<object>());
+            status = "Není dost kladných hodnot pro vytvoření podílu v sunburstu.";
+            await JS.InvokeVoidAsync("sunburstInterop.renderSunburst", "sunburstChart", "Bez dat", Array.Empty<object>());
             return;
         }
 
@@ -207,23 +210,42 @@
         {
             new
             {
-                name = "Total",
+                name = "Celkem",
                 children
             }
         };
 
-        var title = selectedBasis == "energy_share"
-            ? "Sunburst share by integrated energy [%]"
-            : "Sunburst share by average active power [%]";
+        var title = selectedBasis switch
+        {
+            "energy_p_share" => "Sunburst: podíl podle integrované aktivní energie [%]",
+            "energy_q_share" => "Sunburst: podíl podle integrované jalové energie [%]",
+            "power_avg_p_share" => "Sunburst: podíl podle průměrného aktivního výkonu [%]",
+            "power_avg_s_share" => "Sunburst: podíl podle průměrného zdánlivého výkonu [%]",
+            "power_peak_p_share" => "Sunburst: podíl podle špičky aktivního výkonu [%]",
+            _ => "Sunburst: podíl [%]"
+        };
 
         await JS.InvokeVoidAsync("sunburstInterop.renderSunburst", "sunburstChart", title, data);
 
-        status = $"Rendered sunburst for {children.Length} source(s), aggregation: {selectedBasis}.";
+        status = $"Vykresleno pro {children.Length} zdrojů, agregace: {selectedBasis}.";
     }
 
-    private double CalculateEnergyIntegral(MeterData meter)
+    private double CalculateBasisValue(MeterData meter, string basisKey)
     {
-        var points = BuildSignalPoints(meter, "P_avg_3P").OrderBy(p => p.Time).ToList();
+        return basisKey switch
+        {
+            "energy_p_share" => CalculateEnergyIntegral(meter, "P_avg_3P"),
+            "energy_q_share" => CalculateEnergyIntegral(meter, "Q_avg_3Q"),
+            "power_avg_p_share" => CalculateAverageSignal(meter, "P_avg_3P"),
+            "power_avg_s_share" => CalculateAverageSignal(meter, "S_avg_3S"),
+            "power_peak_p_share" => CalculatePeakSignal(meter, "P_avg_3P"),
+            _ => CalculateEnergyIntegral(meter, "P_avg_3P")
+        };
+    }
+
+    private double CalculateEnergyIntegral(MeterData meter, string signal)
+    {
+        var points = BuildSignalPoints(meter, signal).OrderBy(p => p.Time).ToList();
         if (points.Count == 0)
         {
             return 0;
@@ -245,14 +267,24 @@
         return totalWh;
     }
 
-    private double CalculateAvgPower(MeterData meter)
+    private double CalculateAverageSignal(MeterData meter, string signal)
     {
-        var values = BuildSignalPoints(meter, "P_avg_3P")
+        var values = BuildSignalPoints(meter, signal)
             .Select(x => x.Value)
             .Where(v => !double.IsNaN(v) && !double.IsInfinity(v) && v > 0)
             .ToList();
 
         return values.Count == 0 ? 0 : values.Average();
+    }
+
+    private double CalculatePeakSignal(MeterData meter, string signal)
+    {
+        var values = BuildSignalPoints(meter, signal)
+            .Select(x => x.Value)
+            .Where(v => !double.IsNaN(v) && !double.IsInfinity(v) && v > 0)
+            .ToList();
+
+        return values.Count == 0 ? 0 : values.Max();
     }
 
     private IEnumerable<(DateTime Time, double Value)> BuildSignalPoints(MeterData meter, string signal)

@@ -15,7 +15,7 @@ window.sunburstInterop = {
         const option = {
             animation: false,
             title: {
-                text: title || 'Sunburst share',
+                text: title || 'Sunburst: podíl zdrojů',
                 left: 'center',
                 top: 8,
                 textStyle: { fontSize: 14, fontWeight: 600 }
