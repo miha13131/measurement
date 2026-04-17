@@ -24,6 +24,8 @@
 
 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
     <button @onclick="LoadAndDraw">Load + Draw</button>
+    <label>Max rows:</label>
+    <input type="number" min="500" max="200000" step="500" @bind="maxRowsToLoad" style="width:120px;" />
 
     <label>Metric:</label>
     <select @onchange="OnSignalChanged" disabled="@(meters.Count == 0)">
@@ -46,6 +48,29 @@
         Raw meters
     </label>
 </div>
+
+@if (meters.Count > 0)
+{
+    <div style="margin-bottom:10px; padding:10px; border:1px solid #d1d5db; background:#f9fafb;">
+        <strong>Overview first: zoom & filter</strong>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px;">
+            <label>From:</label>
+            <input type="datetime-local" @bind="filterFromText" />
+            <label>To:</label>
+            <input type="datetime-local" @bind="filterToText" />
+            <button @onclick="ApplyDateFilter">Apply filter</button>
+            <button @onclick="ResetDateFilter">Reset</button>
+        </div>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px;">
+            <label>Zoom start %</label>
+            <input type="range" min="0" max="100" step="1" value="@zoomStartPercent" @oninput="OnZoomStartChanged" />
+            <span>@zoomStartPercent%</span>
+            <label>Zoom end %</label>
+            <input type="range" min="0" max="100" step="1" value="@zoomEndPercent" @oninput="OnZoomEndChanged" />
+            <span>@zoomEndPercent%</span>
+        </div>
+    </div>
+}
 
 @if (meters.Count > 0)
 {
@@ -106,6 +131,48 @@
     </div>
 }
 
+@if (detailSnapshot is not null)
+{
+    <h5 style="margin-top:14px;">Details on demand</h5>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+        <label>Timestamp:</label>
+        <input type="datetime-local" @bind="detailTimeText" />
+        <button @onclick="RefreshDetails">Show details</button>
+    </div>
+
+    <div style="overflow:auto; max-height:260px; border:1px solid #ddd; background:white;">
+        <table class="table table-sm table-striped" style="margin-bottom:0;">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    @foreach (var meterName in activeMeterNames)
+                    {
+                        <th>@meterName</th>
+                    }
+                    <th>@CurrentAggregationLabel</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>@detailSnapshot.Time.ToString("yyyy-MM-dd HH:mm")</td>
+                    @foreach (var meterName in activeMeterNames)
+                    {
+                        if (detailSnapshot.MeterValues.TryGetValue(meterName, out var meterValue))
+                        {
+                            <td>@meterValue.ToString("0.###")</td>
+                        }
+                        else
+                        {
+                            <td>—</td>
+                        }
+                    }
+                    <td>@(detailSnapshot.AggregatedValue?.ToString("0.###") ?? "—")</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+}
+
 @code {
     private sealed record Rec(int Id, string Name);
     private sealed record Signal(string Key, string Label, string YAxis);
@@ -122,6 +189,7 @@
     }
 
     private sealed record AggregationRow(DateTime Time, Dictionary<string, double> MeterValues, double AggregatedValue);
+    private sealed record DetailSnapshot(DateTime Time, Dictionary<string, double> MeterValues, double? AggregatedValue);
 
     private readonly List<Rec> recs =
     [
@@ -168,12 +236,20 @@
     private string selectedAggregation = "sum";
     private bool showRawMeters = true;
     private string status = "Waiting…";
+    private int maxRowsToLoad = 10000;
 
     private CeaZipStore? store;
     private readonly List<MeterData> meters = [];
 
     private readonly List<AggregationRow> summaryRows = [];
     private List<string> activeMeterNames = [];
+    private DetailSnapshot? detailSnapshot;
+
+    private string filterFromText = string.Empty;
+    private string filterToText = string.Empty;
+    private int zoomStartPercent = 0;
+    private int zoomEndPercent = 100;
+    private string detailTimeText = string.Empty;
 
     private string CurrentAggregationLabel => aggregationOptions.FirstOrDefault(x => x.Key == selectedAggregation)?.Label ?? "Aggregation";
     private bool IsSharePieMode => selectedAggregation == "share" && selectedSignal == "P_avg_3P";
@@ -225,7 +301,7 @@
             store.Read(pack.Entry),
             pack.TimeUtc.ToLocalTime(),
             periodMs: 60000,
-            maxRows: 500);
+            maxRows: Math.Clamp(maxRowsToLoad, 500, 200000));
 
         table.Columns.Clear();
         table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
@@ -296,6 +372,7 @@
     {
         summaryRows.Clear();
         activeMeterNames = [];
+        detailSnapshot = null;
 
         if (meters.Count == 0)
         {
@@ -357,6 +434,9 @@
                 status = "No data to calculate SHARE distribution.";
             }
 
+            InitializeDetailTime(rawSeries);
+            RefreshDetailsFromSeries(rawSeries);
+
             return;
         }
 
@@ -401,6 +481,9 @@
 
         var from = availableTimes.FirstOrDefault();
         var to = availableTimes.LastOrDefault();
+        EnsureFilterBounds(from, to);
+        InitializeDetailTime(rawSeries);
+        RefreshDetailsFromSeries(rawSeries);
 
         //status = $"Rendered {datasets.Count} series, points: {totalPoints}. X=time ({from:HH:mm}..{to:HH:mm}), Y={yAxis}, agg={CurrentAggregationLabel}.";
     }
@@ -408,16 +491,24 @@
     private IEnumerable<(DateTime X, double Y)> BuildPoints(MeterData meter)
     {
         int count = Math.Min(meter.Table.Time.Count, meter.Table.Rows.Count);
+        var from = ParseDateTimeOrDefault(filterFromText, meter.Table.Time.FirstOrDefault());
+        var to = ParseDateTimeOrDefault(filterToText, meter.Table.Time.LastOrDefault());
 
         for (int i = 0; i < count; i++)
         {
+            var time = meter.Table.Time[i];
+            if (time < from || time > to)
+            {
+                continue;
+            }
+
             var y = ReadSignalValue(meter, i);
             if (!y.HasValue)
             {
                 continue;
             }
 
-            yield return (meter.Table.Time[i], y.Value);
+            yield return (time, y.Value);
         }
     }
 
@@ -589,6 +680,179 @@
 
         return (numerator.Value / denominator.Value) * 100d;
     }
+
+    private Task ApplyDateFilter()
+    {
+        return DrawChart();
+    }
+
+    private async Task ResetDateFilter()
+    {
+        var allTimes = meters
+            .SelectMany(m => m.Table.Time)
+            .OrderBy(t => t)
+            .ToList();
+
+        if (allTimes.Count == 0)
+        {
+            return;
+        }
+
+        filterFromText = ToDateTimeLocalValue(allTimes.First());
+        filterToText = ToDateTimeLocalValue(allTimes.Last());
+        zoomStartPercent = 0;
+        zoomEndPercent = 100;
+
+        await DrawChart();
+    }
+
+    private async Task OnZoomStartChanged(ChangeEventArgs e)
+    {
+        if (!int.TryParse(e.Value?.ToString(), out var value))
+        {
+            return;
+        }
+
+        zoomStartPercent = Math.Clamp(value, 0, 99);
+        if (zoomStartPercent >= zoomEndPercent)
+        {
+            zoomEndPercent = Math.Min(100, zoomStartPercent + 1);
+        }
+
+        await ApplyZoomByPercent();
+    }
+
+    private async Task OnZoomEndChanged(ChangeEventArgs e)
+    {
+        if (!int.TryParse(e.Value?.ToString(), out var value))
+        {
+            return;
+        }
+
+        zoomEndPercent = Math.Clamp(value, 1, 100);
+        if (zoomEndPercent <= zoomStartPercent)
+        {
+            zoomStartPercent = Math.Max(0, zoomEndPercent - 1);
+        }
+
+        await ApplyZoomByPercent();
+    }
+
+    private async Task ApplyZoomByPercent()
+    {
+        var allTimes = meters
+            .SelectMany(m => m.Table.Time)
+            .OrderBy(t => t)
+            .ToList();
+
+        if (allTimes.Count == 0)
+        {
+            return;
+        }
+
+        var first = allTimes.First();
+        var last = allTimes.Last();
+        var totalTicks = Math.Max(1, last.Ticks - first.Ticks);
+
+        var fromTicks = first.Ticks + (long)(totalTicks * (zoomStartPercent / 100d));
+        var toTicks = first.Ticks + (long)(totalTicks * (zoomEndPercent / 100d));
+        if (fromTicks >= toTicks)
+        {
+            toTicks = fromTicks + TimeSpan.FromMinutes(1).Ticks;
+        }
+
+        filterFromText = ToDateTimeLocalValue(new DateTime(fromTicks));
+        filterToText = ToDateTimeLocalValue(new DateTime(toTicks));
+
+        await DrawChart();
+    }
+
+    private void EnsureFilterBounds(DateTime from, DateTime to)
+    {
+        if (string.IsNullOrWhiteSpace(filterFromText))
+        {
+            filterFromText = ToDateTimeLocalValue(from);
+        }
+
+        if (string.IsNullOrWhiteSpace(filterToText))
+        {
+            filterToText = ToDateTimeLocalValue(to);
+        }
+    }
+
+    private void InitializeDetailTime(Dictionary<string, List<(DateTime X, double Y)>> rawSeries)
+    {
+        var timeline = rawSeries.Values
+            .SelectMany(x => x.Select(p => p.X))
+            .Distinct()
+            .OrderBy(t => t)
+            .ToList();
+
+        if (timeline.Count == 0)
+        {
+            detailTimeText = string.Empty;
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(detailTimeText))
+        {
+            detailTimeText = ToDateTimeLocalValue(timeline.Last());
+        }
+    }
+
+    private Task RefreshDetails()
+    {
+        var enabledMeters = meters.Where(m => m.Enabled).ToList();
+        var rawSeries = enabledMeters.ToDictionary(
+            m => m.Name,
+            m => BuildPoints(m).ToList());
+
+        RefreshDetailsFromSeries(rawSeries);
+        return Task.CompletedTask;
+    }
+
+    private void RefreshDetailsFromSeries(Dictionary<string, List<(DateTime X, double Y)>> rawSeries)
+    {
+        var timeline = rawSeries.Values
+            .SelectMany(s => s.Select(p => p.X))
+            .Distinct()
+            .OrderBy(t => t)
+            .ToList();
+
+        if (timeline.Count == 0)
+        {
+            detailSnapshot = null;
+            return;
+        }
+
+        var target = ParseDateTimeOrDefault(detailTimeText, timeline.Last());
+        var nearest = timeline.OrderBy(t => Math.Abs((t - target).Ticks)).First();
+
+        var meterValues = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, points) in rawSeries)
+        {
+            var point = points.FirstOrDefault(p => p.X == nearest);
+            if (point != default)
+            {
+                meterValues[name] = point.Y;
+            }
+        }
+
+        double? aggregate = null;
+        if (selectedAggregation is not "none" and not "share")
+        {
+            var aggregated = BuildAggregatedSeries(rawSeries, selectedAggregation).FirstOrDefault(x => x.Time == nearest);
+            aggregate = aggregated.Value;
+        }
+
+        detailSnapshot = new DetailSnapshot(nearest, meterValues, aggregate);
+    }
+
+    private static string ToDateTimeLocalValue(DateTime value)
+        => value.ToString("yyyy-MM-ddTHH:mm");
+
+    private static DateTime ParseDateTimeOrDefault(string value, DateTime fallback)
+        => DateTime.TryParse(value, out var parsed) ? parsed : fallback;
 
     private static double StdDev(double[] values)
     {
