@@ -1,5 +1,6 @@
 @page "/meter-analysis"
 @inject HttpClient Http
+@inject CeaDataContext DataContext
 @inject IJSRuntime JS
 
 @using DeviceMeasurementsApp.Models
@@ -257,7 +258,7 @@
     private async Task LoadAndDraw()
     {
         //status = "Loading archive…";
-        store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+        store = await DataContext.LoadStoreAsync(Http);
 
         meters.Clear();
 
