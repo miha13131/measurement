@@ -59,10 +59,10 @@
 
         <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px;">
             <label>From:</label>
-            <input type="datetime-local" @bind="filterFromText" />
+            <input type="datetime-local" @bind-value="filterFrom" @bind-value:format="yyyy-MM-ddTHH:mm" />
 
             <label>To:</label>
-            <input type="datetime-local" @bind="filterToText" />
+            <input type="datetime-local" @bind-value="filterTo" @bind-value:format="yyyy-MM-ddTHH:mm" />
 
             <button @onclick="ApplyDateFilter">Apply filter</button>
             <button @onclick="ResetDateFilter">Reset</button>
@@ -146,7 +146,7 @@
     <h5 style="margin-top:14px;">Details-on-demand</h5>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
         <label>Timestamp:</label>
-        <input type="datetime-local" @bind="detailTimeText" />
+        <input type="datetime-local" @bind-value="detailTime" @bind-value:format="yyyy-MM-ddTHH:mm" />
         <button @onclick="RefreshDetails">Show details</button>
     </div>
 
@@ -252,11 +252,11 @@
     private List<string> activeMeterNames = [];
     private DetailSnapshot? detailSnapshot;
 
-    private string filterFromText = string.Empty;
-    private string filterToText = string.Empty;
+    private DateTime? filterFrom;
+    private DateTime? filterTo;
     private int zoomStartPercent = 0;
     private int zoomEndPercent = 100;
-    private string detailTimeText = string.Empty;
+    private DateTime? detailTime;
 
     private string CurrentAggregationLabel => aggregationOptions.FirstOrDefault(x => x.Key == selectedAggregation)?.Label ?? "Aggregation";
 
@@ -456,14 +456,14 @@
         InitializeDetailTime(rawSeries);
         RefreshDetailsFromSeries(rawSeries);
 
-        status = $"Rendered: {datasets.Count} series, points: {availableTimes.Count}.";
+        status = $"Rendered: {datasets.Count} series, points: {availableTimes.Count}. Data range: {availableTimes.First():yyyy-MM-dd HH:mm} .. {availableTimes.Last():yyyy-MM-dd HH:mm}.";
     }
 
     private IEnumerable<(DateTime X, double Y)> BuildPoints(MeterData meter)
     {
         int count = Math.Min(meter.Table.Time.Count, meter.Table.Rows.Count);
-        var from = ParseDateTimeOrDefault(filterFromText, meter.Table.Time.FirstOrDefault());
-        var to = ParseDateTimeOrDefault(filterToText, meter.Table.Time.LastOrDefault());
+        var from = filterFrom ?? meter.Table.Time.FirstOrDefault();
+        var to = filterTo ?? meter.Table.Time.LastOrDefault();
 
         for (int i = 0; i < count; i++)
         {
@@ -626,8 +626,8 @@
             return;
         }
 
-        filterFromText = ToDateTimeLocalValue(allTimes.First());
-        filterToText = ToDateTimeLocalValue(allTimes.Last());
+        filterFrom = allTimes.First();
+        filterTo = allTimes.Last();
         zoomStartPercent = 0;
         zoomEndPercent = 100;
 
@@ -690,22 +690,22 @@
             toTicks = fromTicks + TimeSpan.FromMinutes(1).Ticks;
         }
 
-        filterFromText = ToDateTimeLocalValue(new DateTime(fromTicks));
-        filterToText = ToDateTimeLocalValue(new DateTime(toTicks));
+        filterFrom = new DateTime(fromTicks);
+        filterTo = new DateTime(toTicks);
 
         await DrawChart();
     }
 
     private void EnsureFilterBounds(DateTime from, DateTime to)
     {
-        if (string.IsNullOrWhiteSpace(filterFromText))
+        if (!filterFrom.HasValue)
         {
-            filterFromText = ToDateTimeLocalValue(from);
+            filterFrom = from;
         }
 
-        if (string.IsNullOrWhiteSpace(filterToText))
+        if (!filterTo.HasValue)
         {
-            filterToText = ToDateTimeLocalValue(to);
+            filterTo = to;
         }
     }
 
@@ -719,13 +719,13 @@
 
         if (timeline.Count == 0)
         {
-            detailTimeText = string.Empty;
+            detailTime = null;
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(detailTimeText))
+        if (!detailTime.HasValue)
         {
-            detailTimeText = ToDateTimeLocalValue(timeline.Last());
+            detailTime = timeline.Last();
         }
     }
 
@@ -754,7 +754,7 @@
             return;
         }
 
-        var target = ParseDateTimeOrDefault(detailTimeText, timeline.Last());
+        var target = detailTime ?? timeline.Last();
         var nearest = timeline.OrderBy(t => Math.Abs((t - target).Ticks)).First();
 
         var meterValues = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
