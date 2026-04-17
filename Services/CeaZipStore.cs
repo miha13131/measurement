@@ -6,14 +6,19 @@ using System.IO.Compression;
 using System.Linq;
 using System.Buffers.Binary;
 using System.Threading.Tasks;
+using System.Xml.Linq;
 
 namespace DeviceMeasurementsApp.Services
 {
     public sealed class CeaZipStore
     {
+        public sealed record RecRef(int Id, string Name);
+
         private readonly byte[] _zip;
 
         private CeaZipStore(byte[] zip) => _zip = zip;
+
+        public static CeaZipStore FromBytes(byte[] bytes) => new(bytes);
 
         public static async Task<CeaZipStore> LoadAsync(HttpClient http, string path)
         {
@@ -23,6 +28,48 @@ namespace DeviceMeasurementsApp.Services
 
         private ZipArchive Open()
             => new(new MemoryStream(_zip), ZipArchiveMode.Read);
+
+
+        public List<RecRef> GetRecords()
+        {
+            using var z = Open();
+
+            var treeEntry = z.GetEntry("Info/TreeList.xml");
+            if (treeEntry != null)
+            {
+                using var stream = treeEntry.Open();
+                var doc = XDocument.Load(stream);
+
+                var records = doc
+                    .Descendants("Record")
+                    .Select(r => new
+                    {
+                        Name = (r.Element("record")?.Value ?? string.Empty).Trim(),
+                        IdText = (r.Element("ID")?.Value ?? string.Empty).Trim()
+                    })
+                    .Where(x => int.TryParse(x.IdText, out _))
+                    .Select(x => new RecRef(int.Parse(x.IdText), string.IsNullOrWhiteSpace(x.Name) ? $"Object {x.IdText}" : x.Name))
+                    .GroupBy(x => x.Id)
+                    .Select(g => g.First())
+                    .OrderBy(x => x.Id)
+                    .ToList();
+
+                if (records.Count > 0)
+                {
+                    return records;
+                }
+            }
+
+            return z.Entries
+                .Where(e => e.FullName.StartsWith("UNI/"))
+                .Select(e => e.FullName.Split('/', StringSplitOptions.RemoveEmptyEntries))
+                .Where(parts => parts.Length >= 2 && int.TryParse(parts[1], out _))
+                .Select(parts => int.Parse(parts[1]))
+                .Distinct()
+                .OrderBy(x => x)
+                .Select(id => new RecRef(id, $"Object {id}"))
+                .ToList();
+        }
 
         public List<byte> GetArchIds(int recId)
         {

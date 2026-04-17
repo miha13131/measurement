@@ -1,5 +1,6 @@
 ﻿@page "/boxplot"
 @inject HttpClient Http
+@inject CeaDataContext DataContext
 @inject IJSRuntime JS
 
 @using DeviceMeasurementsApp.Models
@@ -102,7 +103,7 @@
 
     private async Task LoadAndDraw()
     {
-        store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+        store = await DataContext.LoadStoreAsync(Http);
         isLoaded = true;
         await LoadTableAndDraw();
     }
