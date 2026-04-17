@@ -1,0 +1,253 @@
+@page "/measurements-table"
+@using Microsoft.AspNetCore.Components.Forms
+@using DeviceMeasurementsApp.Models
+@using DeviceMeasurementsApp.Services
+@inject HttpClient Http
+
+<h3>Measurements Table</h3>
+
+<p>Upload a <code>.cea</code> file, choose the record/archive/package and render data as a table.</p>
+
+<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+    <InputFile OnChange="OnFileSelected" accept=".cea" />
+
+    <button @onclick="LoadDemoFile">Load demo file</button>
+
+    <label>Record:</label>
+    <select @onchange="OnRecordChanged" disabled="@(records.Count == 0)">
+        @foreach (var rec in records)
+        {
+            <option value="@rec.Id" selected="@(rec.Id == selectedRecordId)">@rec.Name (@rec.Id)</option>
+        }
+    </select>
+
+    <label>Archive:</label>
+    <select @onchange="OnArchiveChanged" disabled="@(archiveIds.Count == 0)">
+        @foreach (var archId in archiveIds)
+        {
+            <option value="@archId" selected="@(archId == selectedArchiveId)">@archId</option>
+        }
+    </select>
+
+    <label>Package time:</label>
+    <select @bind="selectedPackEntry" disabled="@(packs.Count == 0)">
+        @foreach (var pack in packs)
+        {
+            <option value="@pack.Entry">@pack.TimeUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</option>
+        }
+    </select>
+
+    <label>Rows:</label>
+    <input type="number" min="10" max="10000" step="10" @bind="maxRows" disabled="@(store is null)" />
+
+    <button @onclick="LoadSelectedData" disabled="@(store is null || string.IsNullOrWhiteSpace(selectedPackEntry))">Show table</button>
+</div>
+
+<p>@status</p>
+
+@if (table is not null)
+{
+    <h4>Table: @SelectedRecordName</h4>
+
+    <div style="overflow:auto; max-height:500px; border:1px solid #ddd;">
+        <table class="table table-sm table-striped" style="margin-bottom:0;">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    @foreach (var c in table.Columns)
+                    {
+                        <th>@c.DisplayName</th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @for (var i = 0; i < table.Rows.Count; i++)
+                {
+                    <tr>
+                        <td>@table.Time[i].ToString("HH:mm")</td>
+                        @for (var c = 0; c < Math.Min(table.Columns.Count, table.Rows[i].Length); c++)
+                        {
+                            <td>@table.Rows[i][c].ToString("0.###")</td>
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private CeaZipStore? store;
+    private UniArchTable? table;
+
+    private readonly List<CeaZipStore.RecRef> records = [];
+    private readonly List<byte> archiveIds = [];
+    private readonly List<CeaZipStore.BinPackRef> packs = [];
+
+    private int selectedRecordId;
+    private byte selectedArchiveId;
+    private string selectedPackEntry = string.Empty;
+    private int maxRows = 500;
+
+    private string status = "Waiting for .cea file upload…";
+
+    private string SelectedRecordName => records.FirstOrDefault(x => x.Id == selectedRecordId)?.Name ?? $"Object {selectedRecordId}";
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            var file = e.File;
+            await using var stream = file.OpenReadStream(maxAllowedSize: 200 * 1024 * 1024);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+
+            store = CeaZipStore.FromBytes(ms.ToArray());
+            table = null;
+
+            status = $"Loaded file: {file.Name}.";
+            RefreshSelections();
+        }
+        catch (Exception ex)
+        {
+            ResetAll();
+            status = $"Failed to load file: {ex.Message}";
+        }
+    }
+
+    private async Task LoadDemoFile()
+    {
+        try
+        {
+            store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+            table = null;
+            status = "Demo file loaded.";
+            RefreshSelections();
+        }
+        catch (Exception ex)
+        {
+            ResetAll();
+            status = $"Failed to load demo file: {ex.Message}";
+        }
+    }
+
+
+    private void RefreshSelections()
+    {
+        records.Clear();
+        archiveIds.Clear();
+        packs.Clear();
+
+        if (store is null)
+        {
+            return;
+        }
+
+        records.AddRange(store.GetRecords());
+
+        selectedRecordId = records.FirstOrDefault()?.Id ?? 0;
+        RebuildArchives();
+    }
+
+    private void RebuildArchives()
+    {
+        archiveIds.Clear();
+        packs.Clear();
+        selectedPackEntry = string.Empty;
+
+        if (store is null || selectedRecordId == 0)
+        {
+            return;
+        }
+
+        archiveIds.AddRange(store.GetArchIds(selectedRecordId));
+        selectedArchiveId = archiveIds.FirstOrDefault();
+
+        RebuildPacks();
+    }
+
+    private void RebuildPacks()
+    {
+        packs.Clear();
+        selectedPackEntry = string.Empty;
+
+        if (store is null || selectedRecordId == 0)
+        {
+            return;
+        }
+
+        packs.AddRange(store.GetBinPacks(selectedRecordId, selectedArchiveId).OrderByDescending(x => x.TimeUtc));
+        selectedPackEntry = packs.FirstOrDefault()?.Entry ?? string.Empty;
+    }
+
+    private Task OnRecordChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var recId))
+        {
+            selectedRecordId = recId;
+            table = null;
+            RebuildArchives();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private Task OnArchiveChanged(ChangeEventArgs e)
+    {
+        if (byte.TryParse(e.Value?.ToString(), out var archId))
+        {
+            selectedArchiveId = archId;
+            table = null;
+            RebuildPacks();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private Task LoadSelectedData()
+    {
+        if (store is null || selectedRecordId == 0 || string.IsNullOrWhiteSpace(selectedPackEntry))
+        {
+            status = "Please upload a file and choose record/package.";
+            return Task.CompletedTask;
+        }
+
+        var pack = packs.FirstOrDefault(x => x.Entry == selectedPackEntry);
+        if (pack is null)
+        {
+            status = "Selected package not found.";
+            table = null;
+            return Task.CompletedTask;
+        }
+
+        var bytes = store.Read(pack.Entry);
+        var typeXml = store.ReadArchDefXml(selectedRecordId, selectedArchiveId);
+        var columns = ArchDefParser.ParseColumns(typeXml);
+
+        table = UniArchTableParser.ParseMinuteTable(
+            bytes,
+            pack.TimeUtc.ToLocalTime(),
+            periodMs: 60000,
+            maxRows: Math.Clamp(maxRows, 10, 10000));
+
+        table.Columns.Clear();
+        table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
+
+        status = $"Loaded {SelectedRecordName}, arch {selectedArchiveId}, package {pack.TimeUtc:O}.";
+        return Task.CompletedTask;
+    }
+
+    private void ResetAll()
+    {
+        store = null;
+        table = null;
+
+        records.Clear();
+        archiveIds.Clear();
+        packs.Clear();
+
+        selectedRecordId = 0;
+        selectedArchiveId = 0;
+        selectedPackEntry = string.Empty;
+    }
+}
