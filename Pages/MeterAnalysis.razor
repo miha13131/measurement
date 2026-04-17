@@ -1,5 +1,6 @@
 @page "/meter-analysis"
 @inject HttpClient Http
+@inject CeaDataContext DataContext
 @inject IJSRuntime JS
 
 @using DeviceMeasurementsApp.Models
@@ -23,7 +24,7 @@
 </div>
 
 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-    <button @onclick="LoadAndDraw">Load + Draw</button>
+    <button @onclick="LoadAndDraw">Load data + Draw</button>
 
     <label>Metric:</label>
     <select @onchange="OnSignalChanged" disabled="@(meters.Count == 0)">
@@ -181,7 +182,7 @@
     private async Task LoadAndDraw()
     {
         //status = "Loading archive…";
-        store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+        store = await DataContext.LoadStoreAsync(Http);
 
         meters.Clear();
 

@@ -1,5 +1,6 @@
 @page "/sparks"
 @inject HttpClient Http
+@inject CeaDataContext DataContext
 
 @using System.Globalization
 @using DeviceMeasurementsApp.Services
@@ -8,7 +9,7 @@
 <h3>SkySpark-like Sparks</h3>
 
 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-    <button @onclick="Load">Load SMY134aEMIx.cea</button>
+    <button @onclick="Load">Load data</button>
 
     @if (store != null)
     {
@@ -102,7 +103,7 @@
 
     private async Task Load()
     {
-        store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+        store = await DataContext.LoadStoreAsync(Http);
         table = null;
         view = null;
         status = "Loaded. Select object.";

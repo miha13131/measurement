@@ -3,54 +3,79 @@
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
 @inject HttpClient Http
+@inject CeaDataContext DataContext
 
 <h3>Measurements Table</h3>
 
-<p>Upload a <code>.cea</code> file, choose the record/archive/package and render data as a table.</p>
+<p>Upload a <code>.cea</code> file and load the full table with interactive object buttons.</p>
+<p style="color:#374151; font-size:13px;">Uploaded file becomes the active data source for other visual pages (/measurements, /meter-analysis, /sparks, /stacked-bar, /sunburst, /pie, /boxplot).</p>
+
 
 <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
     <InputFile OnChange="OnFileSelected" accept=".cea" />
-
     <button @onclick="LoadDemoFile">Load demo file</button>
-
-    <label>Record:</label>
-    <select @onchange="OnRecordChanged" disabled="@(records.Count == 0)">
-        @foreach (var rec in records)
-        {
-            <option value="@rec.Id" selected="@(rec.Id == selectedRecordId)">@rec.Name (@rec.Id)</option>
-        }
-    </select>
-
-    <label>Archive:</label>
-    <select @onchange="OnArchiveChanged" disabled="@(archiveIds.Count == 0)">
-        @foreach (var archId in archiveIds)
-        {
-            <option value="@archId" selected="@(archId == selectedArchiveId)">@archId</option>
-        }
-    </select>
-
-    <label>Package time:</label>
-    <select @bind="selectedPackEntry" disabled="@(packs.Count == 0)">
-        @foreach (var pack in packs)
-        {
-            <option value="@pack.Entry">@pack.TimeUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</option>
-        }
-    </select>
-
-    <label>Rows:</label>
-    <input type="number" min="10" max="10000" step="10" @bind="maxRows" disabled="@(store is null)" />
-
-    <button @onclick="LoadSelectedData" disabled="@(store is null || string.IsNullOrWhiteSpace(selectedPackEntry))">Show table</button>
 </div>
 
 <p>@status</p>
 
+@if (records.Count > 0)
+{
+    <h4>OBJECT</h4>
+    @foreach (var rec in records)
+    {
+        <button
+            style="margin-right:6px; margin-bottom:6px; @(rec.Id == selectedRecordId ? "font-weight:700; border:2px solid #111;" : "")"
+            @onclick="() => SelectRecord(rec.Id)">
+            @rec.Name
+        </button>
+    }
+}
+
+@if (archiveIds.Count > 0)
+{
+    <h5>Archive</h5>
+    @foreach (var archId in archiveIds)
+    {
+        <button
+            style="margin-right:6px; margin-bottom:6px; @(archId == selectedArchiveId ? "font-weight:700; border:2px solid #111;" : "")"
+            @onclick="() => SelectArchive(archId)">
+            @archId
+        </button>
+    }
+}
+
+@if (packs.Count > 0)
+{
+    <div style="display:flex; gap:8px; align-items:center; margin:8px 0 10px 0; flex-wrap:wrap;">
+        <label>Package time:</label>
+        <select @bind="selectedPackEntry" style="min-width:280px;">
+            @foreach (var pack in packs)
+            {
+                <option value="@pack.Entry">@pack.TimeUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</option>
+            }
+        </select>
+
+        <button @onclick="LoadSelectedData">Load full table</button>
+    </div>
+}
+
 @if (table is not null)
 {
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+        <label>From:</label>
+        <input type="date" @bind="filterFromDate" />
+
+        <label>To:</label>
+        <input type="date" @bind="filterToDate" />
+
+        <button @onclick="ApplyDateFilter">Apply date filter</button>
+        <button @onclick="ResetDateFilter">Reset</button>
+    </div>
+
     <h4>Table: @SelectedRecordName</h4>
 
     <div style="overflow:auto; max-height:500px; border:1px solid #ddd;">
-        <table class="table table-sm table-striped" style="margin-bottom:0;">
+        <table class="table table-sm" style="margin-bottom:0;">
             <thead>
                 <tr>
                     <th>Time</th>
@@ -61,13 +86,13 @@
                 </tr>
             </thead>
             <tbody>
-                @for (var i = 0; i < table.Rows.Count; i++)
+                @foreach (var rowIndex in filteredRowIndexes)
                 {
                     <tr>
-                        <td>@table.Time[i].ToString("HH:mm")</td>
-                        @for (var c = 0; c < Math.Min(table.Columns.Count, table.Rows[i].Length); c++)
+                        <td>@table.Time[rowIndex].ToString("yyyy-MM-dd HH:mm")</td>
+                        @for (var c = 0; c < Math.Min(table.Columns.Count, table.Rows[rowIndex].Length); c++)
                         {
-                            <td>@table.Rows[i][c].ToString("0.###")</td>
+                            <td>@table.Rows[rowIndex][c].ToString("0.###")</td>
                         }
                     </tr>
                 }
@@ -77,6 +102,8 @@
 }
 
 @code {
+    private const int FullTableRowsLimit = 2_000_000;
+
     private CeaZipStore? store;
     private UniArchTable? table;
 
@@ -87,7 +114,10 @@
     private int selectedRecordId;
     private byte selectedArchiveId;
     private string selectedPackEntry = string.Empty;
-    private int maxRows = 500;
+
+    private string filterFromDate = string.Empty;
+    private string filterToDate = string.Empty;
+    private readonly List<int> filteredRowIndexes = [];
 
     private string status = "Waiting for .cea file upload…";
 
@@ -102,10 +132,12 @@
             using var ms = new MemoryStream();
             await stream.CopyToAsync(ms);
 
-            store = CeaZipStore.FromBytes(ms.ToArray());
+            var bytes = ms.ToArray();
+            store = CeaZipStore.FromBytes(bytes);
+            DataContext.SetCustomData(bytes, file.Name);
             table = null;
 
-            status = $"Loaded file: {file.Name}.";
+            status = $"Loaded file: {file.Name}. Select object.";
             RefreshSelections();
         }
         catch (Exception ex)
@@ -119,9 +151,10 @@
     {
         try
         {
+            DataContext.ClearCustomData();
             store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
             table = null;
-            status = "Demo file loaded.";
+            status = "Demo file loaded. Select object.";
             RefreshSelections();
         }
         catch (Exception ex)
@@ -131,12 +164,12 @@
         }
     }
 
-
     private void RefreshSelections()
     {
         records.Clear();
         archiveIds.Clear();
         packs.Clear();
+        selectedPackEntry = string.Empty;
 
         if (store is null)
         {
@@ -144,12 +177,12 @@
         }
 
         records.AddRange(store.GetRecords());
-
         selectedRecordId = records.FirstOrDefault()?.Id ?? 0;
-        RebuildArchives();
+
+        RebuildArchivesAndPacks();
     }
 
-    private void RebuildArchives()
+    private void RebuildArchivesAndPacks()
     {
         archiveIds.Clear();
         packs.Clear();
@@ -180,35 +213,29 @@
         selectedPackEntry = packs.FirstOrDefault()?.Entry ?? string.Empty;
     }
 
-    private Task OnRecordChanged(ChangeEventArgs e)
+    private async Task SelectRecord(int recId)
     {
-        if (int.TryParse(e.Value?.ToString(), out var recId))
-        {
-            selectedRecordId = recId;
-            table = null;
-            RebuildArchives();
-        }
+        selectedRecordId = recId;
+        table = null;
 
-        return Task.CompletedTask;
+        RebuildArchivesAndPacks();
+        await LoadSelectedData();
     }
 
-    private Task OnArchiveChanged(ChangeEventArgs e)
+    private async Task SelectArchive(byte archId)
     {
-        if (byte.TryParse(e.Value?.ToString(), out var archId))
-        {
-            selectedArchiveId = archId;
-            table = null;
-            RebuildPacks();
-        }
+        selectedArchiveId = archId;
+        table = null;
 
-        return Task.CompletedTask;
+        RebuildPacks();
+        await LoadSelectedData();
     }
 
     private Task LoadSelectedData()
     {
         if (store is null || selectedRecordId == 0 || string.IsNullOrWhiteSpace(selectedPackEntry))
         {
-            status = "Please upload a file and choose record/package.";
+            status = "Please upload a file and choose object/package.";
             return Task.CompletedTask;
         }
 
@@ -228,14 +255,64 @@
             bytes,
             pack.TimeUtc.ToLocalTime(),
             periodMs: 60000,
-            maxRows: Math.Clamp(maxRows, 10, 10000));
+            maxRows: FullTableRowsLimit);
 
         table.Columns.Clear();
         table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
 
-        status = $"Loaded {SelectedRecordName}, arch {selectedArchiveId}, package {pack.TimeUtc:O}.";
+        if (table.Time.Count > 0)
+        {
+            filterFromDate = table.Time.First().Date.ToString("yyyy-MM-dd");
+            filterToDate = table.Time.Last().Date.ToString("yyyy-MM-dd");
+        }
+
+        ApplyDateFilter();
         return Task.CompletedTask;
     }
+
+    private void ApplyDateFilter()
+    {
+        filteredRowIndexes.Clear();
+
+        if (table is null || table.Time.Count == 0)
+        {
+            return;
+        }
+
+        var from = ParseDateOrDefault(filterFromDate, table.Time.First().Date);
+        var to = ParseDateOrDefault(filterToDate, table.Time.Last().Date).AddDays(1).AddTicks(-1);
+
+        if (from > to)
+        {
+            (from, to) = (to.Date, from.Date.AddDays(1).AddTicks(-1));
+        }
+
+        for (var i = 0; i < table.Time.Count; i++)
+        {
+            var t = table.Time[i];
+            if (t >= from && t <= to)
+            {
+                filteredRowIndexes.Add(i);
+            }
+        }
+
+        status = $"Loaded full table: {SelectedRecordName}, arch {selectedArchiveId}. Total rows: {table.Rows.Count}. Filtered rows: {filteredRowIndexes.Count}.";
+    }
+
+    private void ResetDateFilter()
+    {
+        if (table is null || table.Time.Count == 0)
+        {
+            return;
+        }
+
+        filterFromDate = table.Time.First().Date.ToString("yyyy-MM-dd");
+        filterToDate = table.Time.Last().Date.ToString("yyyy-MM-dd");
+        ApplyDateFilter();
+    }
+
+    private static DateTime ParseDateOrDefault(string value, DateTime fallbackDate)
+        => DateTime.TryParse(value, out var parsed) ? parsed.Date : fallbackDate.Date;
 
     private void ResetAll()
     {
@@ -249,5 +326,8 @@
         selectedRecordId = 0;
         selectedArchiveId = 0;
         selectedPackEntry = string.Empty;
+        filterFromDate = string.Empty;
+        filterToDate = string.Empty;
+        filteredRowIndexes.Clear();
     }
 }
