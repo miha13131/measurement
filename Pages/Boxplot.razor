@@ -1,6 +1,5 @@
 ﻿@page "/boxplot"
 @inject HttpClient Http
-@inject CeaDataContext DataContext
 @inject IJSRuntime JS
 
 @using DeviceMeasurementsApp.Models
@@ -19,6 +18,9 @@
 
 <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px;">
     <button @onclick="LoadAndDraw">Načíst + vykreslit</button>
+
+    <label>Max rows:</label>
+    <input type="number" min="300" max="200000" step="300" @bind="maxRowsToLoad" style="width:110px;" />
 
     <label>Objekt:</label>
     <select @onchange="OnRecChanged" disabled="@(!isLoaded)">
@@ -40,11 +42,27 @@
     <input type="number" step="0.1" value="@thresholdText" @onchange="OnThresholdChanged" style="width:90px;" />
     <span>@thresholdUnit</span>
 
+    <label>Okno [min]:</label>
+    <select @onchange="OnWindowMinutesChanged">
+        @foreach (var w in windowOptions)
+        {
+            <option value="@w" selected="@(w == windowMinutes)">@w</option>
+        }
+    </select>
+
+    <label>From:</label>
+    <input type="datetime-local" @bind-value="filterFrom" @bind-value:format="yyyy-MM-ddTHH:mm" />
+
+    <label>To:</label>
+    <input type="datetime-local" @bind-value="filterTo" @bind-value:format="yyyy-MM-ddTHH:mm" />
+
     <label>
         <input type="checkbox" checked="@onlyAboveThreshold" @onchange="OnOnlyAboveThresholdChanged" />
         Pouze okna nad prahem
     </label>
 </div>
+
+<p>@status</p>
 
 @if (windows.Count > 0)
 {
@@ -81,7 +99,14 @@
     [
         new("THDI_3ph_avg", "THDI avg 3-phase", "%"),
         new("U_avg_U1", "Voltage L1 (U_avg_U1)", "V"),
+        new("U_avg_U2", "Voltage L2 (U_avg_U2)", "V"),
+        new("U_avg_U3", "Voltage L3 (U_avg_U3)", "V"),
         new("I_avg_I1", "Current L1 (I_avg_I1)", "A"),
+        new("I_avg_I2", "Current L2 (I_avg_I2)", "A"),
+        new("I_avg_I3", "Current L3 (I_avg_I3)", "A"),
+        new("Q_avg_3Q", "Reactive power total (Q_avg_3Q)", "var"),
+        new("S_avg_3S", "Apparent power total (S_avg_3S)", "VA"),
+        new("PF_3PF", "Power factor total (PF_3PF)", "PF"),
         new("P_avg_3P_kW", "Active power total (P_avg_3P) in kW", "kW"),
         new("price_czk_per_hour", "Estimated electricity cost (from P_avg_3P, 8.5 Kč/kWh)", "Kč/h")
     ];
@@ -96,6 +121,11 @@
     private string selectedMetric = "THDI_3ph_avg";
     private double threshold = 8.0;
     private bool onlyAboveThreshold;
+    private int maxRowsToLoad = 10000;
+    private readonly int[] windowOptions = [10, 15, 30, 60];
+    private int windowMinutes = 10;
+    private DateTime? filterFrom;
+    private DateTime? filterTo;
     private string status = "Čekání…";
 
     private string thresholdText => threshold.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
@@ -103,7 +133,7 @@
 
     private async Task LoadAndDraw()
     {
-        store = await DataContext.LoadStoreAsync(Http);
+        store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
         isLoaded = true;
         await LoadTableAndDraw();
     }
@@ -168,9 +198,19 @@
         var typeXml = store.ReadArchDefXml(selectedRecId, archId);
         var columns = ArchDefParser.ParseColumns(typeXml);
 
-        table = UniArchTableParser.ParseMinuteTable(store.Read(pack.Entry), pack.TimeUtc.ToLocalTime(), periodMs: 60000, maxRows: 900);
+        table = UniArchTableParser.ParseMinuteTable(
+            store.Read(pack.Entry),
+            pack.TimeUtc.ToLocalTime(),
+            periodMs: 60000,
+            maxRows: Math.Clamp(maxRowsToLoad, 300, 200000));
         table.Columns.Clear();
         table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
+
+        if (table.Time.Count > 0)
+        {
+            filterFrom ??= table.Time.First();
+            filterTo ??= table.Time.Last();
+        }
 
         await RebuildAndDraw();
     }
@@ -185,14 +225,18 @@
         }
 
         var metricSeries = BuildMetricSeries(selectedMetric, out var sourceLabel);
-        if (metricSeries.Count == 0)
+        var filteredSeries = metricSeries
+            .Where(x => (!filterFrom.HasValue || x.Time >= filterFrom.Value) && (!filterTo.HasValue || x.Time <= filterTo.Value))
+            .ToList();
+
+        if (filteredSeries.Count == 0)
         {
-            status = $"No data for metric '{selectedMetric}'.";
+            status = $"No data for metric '{selectedMetric}' in selected time range.";
             await JS.InvokeVoidAsync("boxplotInterop.clear", "thdBoxplotChart");
             return;
         }
 
-        windows.AddRange(BuildWindowStats(metricSeries, 10));
+        windows.AddRange(BuildWindowStats(filteredSeries, windowMinutes));
 
         var filtered = onlyAboveThreshold
             ? windows.Where(w => w.P95 > threshold).ToList()
@@ -212,7 +256,16 @@
         var exceedCount = windows.Count(w => w.P95 > threshold);
         status = filtered.Count == 0
             ? $"No windows after filter: P95 > {threshold:0.###} {thresholdUnit}."
-            : $"Windows: {filtered.Count}/{windows.Count}. Above threshold P95 > {threshold:0.###} {thresholdUnit}: {exceedCount}. Source: {sourceLabel}.";
+            : $"Windows: {filtered.Count}/{windows.Count}. Above threshold P95 > {threshold:0.###} {thresholdUnit}: {exceedCount}. Source: {sourceLabel}. Range: {filteredSeries.First().Time:yyyy-MM-dd HH:mm} .. {filteredSeries.Last().Time:yyyy-MM-dd HH:mm}.";
+    }
+
+    private async Task OnWindowMinutesChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var value))
+        {
+            windowMinutes = value;
+            await RebuildAndDraw();
+        }
     }
 
     private int? ResolveColumnIndex(string metricName)

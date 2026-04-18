@@ -36,7 +36,7 @@
                 text: `Krabicový graf (${metricLabel || 'metrika'})`,
                 subtext: `${metricLabel || 'metrika'} – rozdělení${onlyAboveThreshold ? ` • filtr P95 > ${Number(threshold || 0).toFixed(2)} ${thresholdUnit || ''}` : ''}`,
                 left: 'center',
-                textStyle: { fontSize: 28, fontWeight: 700 },
+                textStyle: { fontSize: 30, fontWeight: 800 },
                 subtextStyle: { fontSize: 14, color: '#555' }
             },
             tooltip: {
@@ -99,28 +99,40 @@
                     type: 'boxplot',
                     data: safeBoxes,
                     itemStyle: {
-                        color: '#60a5fa',
-                        borderColor: '#2563eb',
-                        borderWidth: 2
+                        color: '#93c5fd',
+                        borderColor: '#1d4ed8',
+                        borderWidth: 2.8
                     },
                     lineStyle: {
-                        color: '#2563eb',
-                        width: 2
+                        color: '#1d4ed8',
+                        width: 2.8
                     },
                     emphasis: {
                         itemStyle: {
-                            color: '#3b82f6',
+                            color: '#60a5fa',
                             borderColor: '#1d4ed8',
-                            borderWidth: 2.4
+                            borderWidth: 3.2
                         }
                     },
-                    boxWidth: [16, 32]
+                    boxWidth: [20, 40],
+                    markLine: {
+                        silent: true,
+                        symbol: 'none',
+                        lineStyle: { color: '#dc2626', width: 2, type: 'dashed' },
+                        label: {
+                            show: true,
+                            formatter: `P95 limit: ${Number(threshold || 0).toFixed(2)} ${thresholdUnit || ''}`,
+                            color: '#991b1b',
+                            fontWeight: 600
+                        },
+                        data: [{ yAxis: Number(threshold || 0) }]
+                    }
                 },
                 {
                     name: 'Odlehlé hodnoty',
                     type: 'scatter',
                     data: safeOutliers,
-                    symbolSize: 7,
+                    symbolSize: 9,
                     itemStyle: { color: '#dc2626' }
                 }
             ]
