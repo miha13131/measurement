@@ -5,19 +5,17 @@
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
 
-<h3>Boxplot: Power quality (EN 50160)</h3>
+<h3>Krabicový graf: kvalita napětí (EN 50160)</h3>
 
 <p style="max-width:1100px; margin-bottom:10px;">
-    10-minute windows with percentile aggregation. Each box shows median (P50), quartiles (P25/P75),
-    whiskers (1.5×IQR), and outliers. Use <strong>P95 threshold</strong> to focus on problematic windows.
+    10min okna s percentilovou agregací. Každý box ukazuje medián (P50), kvartily (P25/P75),
+    vousy (1.5×IQR) a odlehlé hodnoty. Prah <strong>P95</strong> pomáhá zvýraznit problematická okna.
 </p>
-<p style="max-width:1100px; margin-bottom:10px;">
-    Přidána je i ekonomická metrika: orientační cena je počítána z aktivního výkonu jako
-    <strong>Cena [Kč/h] = (P_avg_3P / 1000) × 8.5</strong>, kde 8.5 Kč/kWh je zadaný tarif.
-</p>
-
 <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px;">
     <button @onclick="LoadAndDraw">Načíst + vykreslit</button>
+
+    <label>Max. řádků:</label>
+    <input type="number" min="300" max="200000" step="300" @bind="maxRowsToLoad" style="width:110px;" />
 
     <label>Objekt:</label>
     <select @onchange="OnRecChanged" disabled="@(!isLoaded)">
@@ -39,11 +37,27 @@
     <input type="number" step="0.1" value="@thresholdText" @onchange="OnThresholdChanged" style="width:90px;" />
     <span>@thresholdUnit</span>
 
+    <label>Okno [min]:</label>
+    <select @onchange="OnWindowMinutesChanged">
+        @foreach (var w in windowOptions)
+        {
+            <option value="@w" selected="@(w == windowMinutes)">@w</option>
+        }
+    </select>
+
+    <label>Od:</label>
+    <input type="datetime-local" @bind-value="filterFrom" @bind-value:format="yyyy-MM-ddTHH:mm" />
+
+    <label>Do:</label>
+    <input type="datetime-local" @bind-value="filterTo" @bind-value:format="yyyy-MM-ddTHH:mm" />
+
     <label>
         <input type="checkbox" checked="@onlyAboveThreshold" @onchange="OnOnlyAboveThresholdChanged" />
         Pouze okna nad prahem
     </label>
 </div>
+
+<p>@status</p>
 
 @if (windows.Count > 0)
 {
@@ -78,11 +92,15 @@
 
     private readonly List<Metric> metrics =
     [
-        new("THDI_3ph_avg", "THDI avg 3-phase", "%"),
-        new("U_avg_U1", "Voltage L1 (U_avg_U1)", "V"),
-        new("I_avg_I1", "Current L1 (I_avg_I1)", "A"),
-        new("P_avg_3P_kW", "Active power total (P_avg_3P) in kW", "kW"),
-        new("price_czk_per_hour", "Estimated electricity cost (from P_avg_3P, 8.5 Kč/kWh)", "Kč/h")
+        new("U_avg_U1", "Napětí L1 (U_avg_U1)", "V"),
+        new("U_avg_U2", "Napětí L2 (U_avg_U2)", "V"),
+        new("U_avg_U3", "Napětí L3 (U_avg_U3)", "V"),
+        new("THDI_3ph_avg", "THDI průměr 3 fází", "%"),
+        new("THDU_3ph_avg", "THDU průměr 3 fází", "%"),
+        new("I_avg_I1", "Proud L1 (I_avg_I1)", "A"),
+        new("I_avg_I2", "Proud L2 (I_avg_I2)", "A"),
+        new("I_avg_I3", "Proud L3 (I_avg_I3)", "A"),
+        new("P_avg_3P", "Aktivní výkon celkem (P_avg_3P)", "W")
     ];
 
     private readonly List<WindowStats> windows = [];
@@ -92,9 +110,14 @@
 
     private bool isLoaded;
     private int selectedRecId = 58;
-    private string selectedMetric = "THDI_3ph_avg";
+    private string selectedMetric = "U_avg_U1";
     private double threshold = 8.0;
     private bool onlyAboveThreshold;
+    private int maxRowsToLoad = 10000;
+    private readonly int[] windowOptions = [10, 15, 30, 60];
+    private int windowMinutes = 10;
+    private DateTime? filterFrom;
+    private DateTime? filterTo;
     private string status = "Čekání…";
 
     private string thresholdText => threshold.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
@@ -167,9 +190,19 @@
         var typeXml = store.ReadArchDefXml(selectedRecId, archId);
         var columns = ArchDefParser.ParseColumns(typeXml);
 
-        table = UniArchTableParser.ParseMinuteTable(store.Read(pack.Entry), pack.TimeUtc.ToLocalTime(), periodMs: 60000, maxRows: 900);
+        table = UniArchTableParser.ParseMinuteTable(
+            store.Read(pack.Entry),
+            pack.TimeUtc.ToLocalTime(),
+            periodMs: 60000,
+            maxRows: Math.Clamp(maxRowsToLoad, 300, 200000));
         table.Columns.Clear();
         table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
+
+        if (table.Time.Count > 0)
+        {
+            filterFrom ??= table.Time.First();
+            filterTo ??= table.Time.Last();
+        }
 
         await RebuildAndDraw();
     }
@@ -184,14 +217,18 @@
         }
 
         var metricSeries = BuildMetricSeries(selectedMetric, out var sourceLabel);
-        if (metricSeries.Count == 0)
+        var filteredSeries = metricSeries
+            .Where(x => (!filterFrom.HasValue || x.Time >= filterFrom.Value) && (!filterTo.HasValue || x.Time <= filterTo.Value))
+            .ToList();
+
+        if (filteredSeries.Count == 0)
         {
-            status = $"No data for metric '{selectedMetric}'.";
+            status = $"Pro metriku '{selectedMetric}' nejsou v daném čase data.";
             await JS.InvokeVoidAsync("boxplotInterop.clear", "thdBoxplotChart");
             return;
         }
 
-        windows.AddRange(BuildWindowStats(metricSeries, 10));
+        windows.AddRange(BuildWindowStats(filteredSeries, windowMinutes));
 
         var filtered = onlyAboveThreshold
             ? windows.Where(w => w.P95 > threshold).ToList()
@@ -210,8 +247,17 @@
 
         var exceedCount = windows.Count(w => w.P95 > threshold);
         status = filtered.Count == 0
-            ? $"No windows after filter: P95 > {threshold:0.###} {thresholdUnit}."
-            : $"Windows: {filtered.Count}/{windows.Count}. Above threshold P95 > {threshold:0.###} {thresholdUnit}: {exceedCount}. Source: {sourceLabel}.";
+            ? $"Po filtru nezůstala žádná okna: P95 > {threshold:0.###} {thresholdUnit}."
+            : $"Oken: {filtered.Count}/{windows.Count}. Nad prahem P95 > {threshold:0.###} {thresholdUnit}: {exceedCount}. Zdroj: {sourceLabel}. Rozsah: {filteredSeries.First().Time:yyyy-MM-dd HH:mm} .. {filteredSeries.Last().Time:yyyy-MM-dd HH:mm}.";
+    }
+
+    private async Task OnWindowMinutesChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var value))
+        {
+            windowMinutes = value;
+            await RebuildAndDraw();
+        }
     }
 
     private int? ResolveColumnIndex(string metricName)
@@ -273,39 +319,54 @@
             return [];
         }
 
-        if (metricKey == "P_avg_3P_kW")
+        if (metricKey == "THDU_3ph_avg")
         {
-            var pIdx = ResolveColumnIndex("P_avg_3P") ?? FindClosestColumnIndex("P_avg_3P");
-            if (!pIdx.HasValue)
+            var thdu1 = ResolveColumnIndex("Harmonics/THDU_avg_THDU1") ?? FindClosestColumnIndex("THDU1");
+            var thdu2 = ResolveColumnIndex("Harmonics/THDU_avg_THDU2") ?? FindClosestColumnIndex("THDU2");
+            var thdu3 = ResolveColumnIndex("Harmonics/THDU_avg_THDU3") ?? FindClosestColumnIndex("THDU3");
+
+            if (!thdu1.HasValue || !thdu2.HasValue || !thdu3.HasValue)
             {
-                sourceLabel = "P_avg_3P not found";
+                sourceLabel = "THDU sloupce nebyly nalezeny";
                 return [];
             }
 
-            sourceLabel = "Derived from P_avg_3P -> kW";
+            sourceLabel = "Průměr THDU1/THDU2/THDU3";
             return table.Time
-                .Zip(table.Rows, (t, row) => new { Time = t, Value = pIdx.Value < row.Length ? row[pIdx.Value] / 1000d : double.NaN })
+                .Zip(table.Rows, (t, row) =>
+                {
+                    var v1 = thdu1.Value < row.Length ? row[thdu1.Value] : double.NaN;
+                    var v2 = thdu2.Value < row.Length ? row[thdu2.Value] : double.NaN;
+                    var v3 = thdu3.Value < row.Length ? row[thdu3.Value] : double.NaN;
+                    var avg = (v1 + v2 + v3) / 3d;
+                    return new { Time = t, Value = avg };
+                })
                 .Where(x => !double.IsNaN(x.Value) && !double.IsInfinity(x.Value))
                 .Select(x => (x.Time, x.Value))
                 .ToList();
         }
 
-        if (metricKey == "price_czk_per_hour")
+        if (metricKey == "THDI_3ph_avg")
         {
-            var pIdx = ResolveColumnIndex("P_avg_3P") ?? FindClosestColumnIndex("P_avg_3P");
-            if (!pIdx.HasValue)
+            var thdi1 = ResolveColumnIndex("Harmonics/THDI_avg_THDI1") ?? FindClosestColumnIndex("THDI1");
+            var thdi2 = ResolveColumnIndex("Harmonics/THDI_avg_THDI2") ?? FindClosestColumnIndex("THDI2");
+            var thdi3 = ResolveColumnIndex("Harmonics/THDI_avg_THDI3") ?? FindClosestColumnIndex("THDI3");
+
+            if (!thdi1.HasValue || !thdi2.HasValue || !thdi3.HasValue)
             {
-                sourceLabel = "P_avg_3P not found";
+                sourceLabel = "THDI sloupce nebyly nalezeny";
                 return [];
             }
 
-            const double pricePerKwh = 8.5;
-            sourceLabel = "Derived: (P_avg_3P / 1000) * 8.5 Kč/h";
+            sourceLabel = "Průměr THDI1/THDI2/THDI3";
             return table.Time
                 .Zip(table.Rows, (t, row) =>
                 {
-                    var p = pIdx.Value < row.Length ? row[pIdx.Value] : double.NaN;
-                    return new { Time = t, Value = (p / 1000d) * pricePerKwh };
+                    var v1 = thdi1.Value < row.Length ? row[thdi1.Value] : double.NaN;
+                    var v2 = thdi2.Value < row.Length ? row[thdi2.Value] : double.NaN;
+                    var v3 = thdi3.Value < row.Length ? row[thdi3.Value] : double.NaN;
+                    var avg = (v1 + v2 + v3) / 3d;
+                    return new { Time = t, Value = avg };
                 })
                 .Where(x => !double.IsNaN(x.Value) && !double.IsInfinity(x.Value))
                 .Select(x => (x.Time, x.Value))
@@ -318,7 +379,7 @@
             var fallback = FindClosestColumnIndex(metricKey);
             if (!fallback.HasValue)
             {
-                sourceLabel = $"Column '{metricKey}' not found";
+                sourceLabel = $"Sloupec '{metricKey}' nebyl nalezen";
                 return [];
             }
 
