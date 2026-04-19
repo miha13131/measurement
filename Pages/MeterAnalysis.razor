@@ -6,7 +6,7 @@
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
 
-<h3>Meter trend</h3>
+<h3>Trend měřičů</h3>
 
 <div style="margin-bottom:10px; font-size:13px; color:#374151;">
     <strong>Přehled metrik:</strong>
@@ -27,7 +27,7 @@
 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
     <button @onclick="LoadAndDraw">Načíst + vykreslit</button>
 
-    <label>Max rows:</label>
+    <label>Max. řádků:</label>
     <input type="number" min="500" max="200000" step="500" @bind="maxRowsToLoad" style="width:120px;" />
 
     <label>Metrika:</label>
@@ -48,32 +48,32 @@
 
     <label>
         <input type="checkbox" checked="@showRawMeters" @onchange="OnShowRawChanged" />
-        Raw meters
+        Surové měřiče
     </label>
 </div>
 
 @if (meters.Count > 0)
 {
     <div style="margin-bottom:10px; padding:10px; border:1px solid #d1d5db; background:#f9fafb;">
-        <strong>Overview first: zoom and filter</strong>
+        <strong>Nejprve přehled: zoom a filtr</strong>
 
         <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px;">
-            <label>From:</label>
+            <label>Od:</label>
             <input type="datetime-local" @bind-value="filterFrom" @bind-value:format="yyyy-MM-ddTHH:mm" />
 
-            <label>To:</label>
+            <label>Do:</label>
             <input type="datetime-local" @bind-value="filterTo" @bind-value:format="yyyy-MM-ddTHH:mm" />
 
-            <button @onclick="ApplyDateFilter">Apply filter</button>
+            <button @onclick="ApplyDateFilter">Použít filtr</button>
             <button @onclick="ResetDateFilter">Reset</button>
         </div>
 
         <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px;">
-            <label>Zoom start %</label>
+            <label>Začátek zoomu %</label>
             <input type="range" min="0" max="100" step="1" value="@zoomStartPercent" @oninput="OnZoomStartChanged" />
             <span>@zoomStartPercent%</span>
 
-            <label>Zoom end %</label>
+            <label>Konec zoomu %</label>
             <input type="range" min="0" max="100" step="1" value="@zoomEndPercent" @oninput="OnZoomEndChanged" />
             <span>@zoomEndPercent%</span>
         </div>
@@ -104,12 +104,12 @@
 
 @if (summaryRows.Count > 0)
 {
-    <h5 style="margin-top:14px;">Aggregation preview (last 12 points)</h5>
+    <h5 style="margin-top:14px;">Náhled agregace (posledních 12 bodů)</h5>
     <div style="overflow:auto; max-height:320px; border:1px solid #ddd; background:white;">
         <table class="table table-sm table-striped" style="margin-bottom:0;">
             <thead>
                 <tr>
-                    <th>Time</th>
+                    <th>Čas</th>
                     @foreach (var meterName in activeMeterNames)
                     {
                         <th>@meterName</th>
@@ -143,18 +143,18 @@
 
 @if (detailSnapshot is not null)
 {
-    <h5 style="margin-top:14px;">Details-on-demand</h5>
+    <h5 style="margin-top:14px;">Detail na vyžádání</h5>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-        <label>Timestamp:</label>
+        <label>Čas:</label>
         <input type="datetime-local" @bind-value="detailTime" @bind-value:format="yyyy-MM-ddTHH:mm" />
-        <button @onclick="RefreshDetails">Show details</button>
+        <button @onclick="RefreshDetails">Zobrazit detail</button>
     </div>
 
     <div style="overflow:auto; max-height:260px; border:1px solid #ddd; background:white;">
         <table class="table table-sm table-striped" style="margin-bottom:0;">
             <thead>
                 <tr>
-                    <th>Time</th>
+                    <th>Čas</th>
                     @foreach (var meterName in activeMeterNames)
                     {
                         <th>@meterName</th>
@@ -232,11 +232,11 @@
 
     private readonly List<AggregationOption> aggregationOptions =
     [
-        new("none", "None"),
-        new("sum", "SUM"),
-        new("avg", "AVG"),
-        new("min", "MIN"),
-        new("max", "MAX")
+        new("none", "Bez agregace"),
+        new("sum", "Součet"),
+        new("avg", "Průměr"),
+        new("min", "Minimum"),
+        new("max", "Maximum")
     ];
 
     private string selectedSignal = "P_avg_3P";
@@ -258,7 +258,7 @@
     private int zoomEndPercent = 100;
     private DateTime? detailTime;
 
-    private string CurrentAggregationLabel => aggregationOptions.FirstOrDefault(x => x.Key == selectedAggregation)?.Label ?? "Aggregation";
+    private string CurrentAggregationLabel => aggregationOptions.FirstOrDefault(x => x.Key == selectedAggregation)?.Label ?? "Agregace";
 
     private async Task LoadAndDraw()
     {
@@ -436,7 +436,7 @@
 
         if (datasets.Count == 0)
         {
-            status = "No data for selected metric / aggregation.";
+            status = "Pro vybranou metriku/agregaci nejsou data.";
             return;
         }
 
@@ -448,7 +448,7 @@
 
         if (availableTimes.Count == 0)
         {
-            status = "No points in selected time window.";
+            status = "Ve zvoleném časovém okně nejsou žádné body.";
             return;
         }
 
@@ -456,7 +456,7 @@
         InitializeDetailTime(rawSeries);
         RefreshDetailsFromSeries(rawSeries);
 
-        status = $"Rendered: {datasets.Count} series, points: {availableTimes.Count}. Data range: {availableTimes.First():yyyy-MM-dd HH:mm} .. {availableTimes.Last():yyyy-MM-dd HH:mm}.";
+        status = $"Vykresleno: {datasets.Count} sérií, bodů: {availableTimes.Count}. Rozsah dat: {availableTimes.First():yyyy-MM-dd HH:mm} .. {availableTimes.Last():yyyy-MM-dd HH:mm}.";
     }
 
     private IEnumerable<(DateTime X, double Y)> BuildPoints(MeterData meter)
