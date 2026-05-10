@@ -9,7 +9,7 @@
 
 <div class="@NavMenuCssClass nav-scrollable" @onclick="ToggleNavMenu">
     <nav class="flex-column nav-groups">
-        <div class="nav-group-title px-3">Visualizations</div>
+        <div class="nav-group-title px-3">Analytics</div>
 
         <div class="nav-item px-3">
             <NavLink class="nav-link" href="meter-analysis">
@@ -23,6 +23,20 @@
             </NavLink>
         </div>
 
+        <div class="nav-group-title px-3">Charts</div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="pie">
+                <span class="bi bi-pie-chart-fill-nav-menu" aria-hidden="true"></span> Pie
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="boxplot">
+                <span class="bi bi-boxes-nav-menu" aria-hidden="true"></span> Boxplot
+            </NavLink>
+        </div>
+
         <div class="nav-item px-3">
             <NavLink class="nav-link" href="stacked-bar">
                 <span class="bi bi-bar-chart-stacked-nav-menu" aria-hidden="true"></span> Stacked bar
@@ -32,12 +46,6 @@
         <div class="nav-item px-3">
             <NavLink class="nav-link" href="sunburst">
                 <span class="bi bi-pie-chart-nav-menu" aria-hidden="true"></span> Sunburst
-            </NavLink>
-        </div>
-
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="pie">
-                <span class="bi bi-pie-chart-fill-nav-menu" aria-hidden="true"></span> Pie
             </NavLink>
         </div>
     </nav>
