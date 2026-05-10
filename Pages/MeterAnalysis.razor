@@ -8,22 +8,6 @@
 
 <h3>Trend měřičů</h3>
 
-<div style="margin-bottom:10px; font-size:13px; color:#374151;">
-    <strong>Přehled metrik:</strong>
-    <ul style="margin:6px 0 0 18px;">
-        <li><strong>P_avg_3P</strong> — celkový činný výkon (reálně využitý výkon) [W].</li>
-        <li><strong>S_avg_3S</strong> — celkový zdánlivý výkon (činná + jalová složka) [VA].</li>
-        <li><strong>I_avg_mean</strong> — průměrný proud tří fází ((I1+I2+I3)/3) [A].</li>
-        <li><strong>PF_3PF</strong> — celkový účiník; čím blíže 1, tím efektivnější provoz [-].</li>
-        <li><strong>Cos_3Cosφ</strong> — cos φ, tedy fázový posun mezi napětím a proudem [-].</li>
-        <li><strong>f_avg_f</strong> — frekvence sítě [Hz].</li>
-        <li><strong>THDI_3ph_avg</strong> — průměrné harmonické zkreslení proudu ve 3 fázích [%].</li>
-        <li><strong>U_phase_imbalance</strong> — nesymetrie fázového napětí (max(U1,U2,U3)-min(...)) [V].</li>
-        <li><strong>P_to_S_ratio</strong> — poměr zatížení výkonu (P_avg_3P / S_avg_3S * 100) [%].</li>
-        <li><strong>U_avg_LL</strong> — průměrné sdružené napětí L-L ((U12+U23+U31)/3) [V].</li>
-    </ul>
-</div>
-
 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
     <button @onclick="LoadAndDraw">Načíst + vykreslit</button>
 
@@ -243,7 +227,7 @@
     private string selectedAggregation = "sum";
     private bool showRawMeters = true;
     private string status = "…";
-    private int maxRowsToLoad = 10000;
+    private int maxRowsToLoad = 1000;
 
     private CeaZipStore? store;
     private readonly List<MeterData> meters = [];
