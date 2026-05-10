@@ -8,49 +8,27 @@
 </div>
 
 <div class="@NavMenuCssClass nav-scrollable" @onclick="ToggleNavMenu">
-    <nav class="flex-column">
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
-                <span class="bi bi-house-door-fill-nav-menu" aria-hidden="true"></span> Home
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="counter">
-                <span class="bi bi-plus-square-fill-nav-menu" aria-hidden="true"></span> Counter
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="weather">
-                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Weather
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="measurements">
-                <span class="bi bi-graph-up-nav-menu" aria-hidden="true"></span> Measurements
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="sparks">
-                <span class="bi bi-graph-up-nav-menu" aria-hidden="true"></span> Sparks
-            </NavLink>
-        </div>
+    <nav class="flex-column nav-groups">
+        <div class="nav-group-title px-3">Visualizations</div>
+
         <div class="nav-item px-3">
             <NavLink class="nav-link" href="meter-analysis">
                 <span class="bi bi-bar-chart-line-fill-nav-menu" aria-hidden="true"></span> Meter analysis
             </NavLink>
         </div>
 
-
         <div class="nav-item px-3">
             <NavLink class="nav-link" href="measurements-table">
                 <span class="bi bi-table-nav-menu" aria-hidden="true"></span> Measurements table
             </NavLink>
         </div>
+
         <div class="nav-item px-3">
             <NavLink class="nav-link" href="stacked-bar">
                 <span class="bi bi-bar-chart-stacked-nav-menu" aria-hidden="true"></span> Stacked bar
             </NavLink>
         </div>
+
         <div class="nav-item px-3">
             <NavLink class="nav-link" href="sunburst">
                 <span class="bi bi-pie-chart-nav-menu" aria-hidden="true"></span> Sunburst
@@ -62,7 +40,6 @@
                 <span class="bi bi-pie-chart-fill-nav-menu" aria-hidden="true"></span> Pie
             </NavLink>
         </div>
-
     </nav>
 </div>
 
