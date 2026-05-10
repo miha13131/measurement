@@ -81,3 +81,17 @@
         overflow-y: auto;
     }
 }
+
+
+.nav-groups {
+    padding-top: 0.5rem;
+}
+
+.nav-group-title {
+    color: rgba(255, 255, 255, 0.65);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin: 0.75rem 0 0.25rem;
+}
