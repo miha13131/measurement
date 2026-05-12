@@ -1,6 +1,5 @@
 @page "/pie"
 @inject HttpClient Http
-@inject CeaDataContext DataContext
 @inject IJSRuntime JS
 
 @using DeviceMeasurementsApp.Models
@@ -46,7 +45,7 @@
     {
         public int Id { get; init; }
         public string Name { get; init; } = string.Empty;
-        public bool Enabled { get; set; } = true;
+        public bool Enabled { get; set; }
         public required UniArchTable Table { get; init; }
         public required Dictionary<string, int> IndexByName { get; init; }
         public required Dictionary<string, int> NormalizedIndexByName { get; init; }
@@ -66,7 +65,7 @@
 
     private async Task LoadAndDraw()
     {
-        store = await DataContext.LoadStoreAsync(Http);
+        store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
 
         meters.Clear();
 
@@ -75,6 +74,7 @@
             var meter = TryLoadMeter(rec);
             if (meter != null)
             {
+                meter.Enabled = meter.Name is "EMI1" or "EMI2" or "EMI3";
                 meters.Add(meter);
             }
         }

@@ -1,16 +1,13 @@
-﻿@page "/boxplot"
+@page "/boxplot"
 @inject HttpClient Http
 @inject IJSRuntime JS
+@inject CeaDataContext DataContext
 
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
 
-<h3>Krabicový graf: kvalita napětí (EN 50160)</h3>
+<h3>Krabicový graf</h3>
 
-<p style="max-width:1100px; margin-bottom:10px;">
-    10min okna s percentilovou agregací. Každý box ukazuje medián (P50), kvartily (P25/P75),
-    vousy (1.5×IQR) a odlehlé hodnoty. Prah <strong>P95</strong> pomáhá zvýraznit problematická okna.
-</p>
 <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px;">
     <button @onclick="LoadAndDraw">Načíst + vykreslit</button>
 
@@ -18,10 +15,18 @@
     <input type="number" min="300" max="200000" step="300" @bind="maxRowsToLoad" style="width:110px;" />
 
     <label>Objekt:</label>
-    <select @onchange="OnRecChanged" disabled="@(!isLoaded)">
+    <select @onchange="OnRecChanged" disabled="@(!isLoaded || recs.Count == 0)">
         @foreach (var rec in recs)
         {
             <option value="@rec.Id" selected="@(rec.Id == selectedRecId)">@rec.Name</option>
+        }
+    </select>
+
+    <label>Archiv:</label>
+    <select @onchange="OnArchiveChanged" disabled="@(!isLoaded || archiveIds.Count == 0)">
+        @foreach (var archId in archiveIds)
+        {
+            <option value="@archId" selected="@(archId == selectedArchiveId)">@archId</option>
         }
     </select>
 
@@ -59,8 +64,6 @@
 
 <p>@status</p>
 
-<p>@status</p>
-
 @if (windows.Count > 0)
 {
     <div style="height:680px; border:1px solid #d6d9df; background:#fafafa; padding:8px;">
@@ -84,13 +87,8 @@
         double UpperWhisker,
         List<double> Outliers);
 
-    private readonly List<Rec> recs =
-    [
-        new(58, "EMI1"),
-        new(60, "EMI2"),
-        new(59, "EMI3"),
-        new(1, "MAIN")
-    ];
+    private readonly List<Rec> recs = [];
+    private readonly List<byte> archiveIds = [];
 
     private readonly List<Metric> metrics =
     [
@@ -111,11 +109,12 @@
     private UniArchTable? table;
 
     private bool isLoaded;
-    private int selectedRecId = 58;
+    private int selectedRecId;
+    private byte selectedArchiveId;
     private string selectedMetric = "U_avg_U1";
     private double threshold = 8.0;
     private bool onlyAboveThreshold;
-    private int maxRowsToLoad = 10000;
+    private int maxRowsToLoad = 1000;
     private readonly int[] windowOptions = [10, 15, 30, 60];
     private int windowMinutes = 10;
     private DateTime? filterFrom;
@@ -127,9 +126,69 @@
 
     private async Task LoadAndDraw()
     {
-        store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+        store = await DataContext.LoadStoreAsync(Http);
         isLoaded = true;
+
+        RebuildRecordsAndArchives();
         await LoadTableAndDraw();
+    }
+
+    private void RebuildRecordsAndArchives()
+    {
+        recs.Clear();
+        archiveIds.Clear();
+
+        if (store == null)
+        {
+            selectedRecId = 0;
+            selectedArchiveId = 0;
+            return;
+        }
+
+        var loadedRecs = store.GetRecords()
+            .Select(r => new Rec(r.Id, r.Name))
+            .OrderBy(r => r.Id)
+            .ToList();
+
+        recs.AddRange(loadedRecs);
+
+        if (recs.Count == 0)
+        {
+            selectedRecId = 0;
+            selectedArchiveId = 0;
+            return;
+        }
+
+        if (!recs.Any(r => r.Id == selectedRecId))
+        {
+            selectedRecId = recs[0].Id;
+        }
+
+        RebuildArchives();
+    }
+
+    private void RebuildArchives()
+    {
+        archiveIds.Clear();
+
+        if (store == null || selectedRecId == 0)
+        {
+            selectedArchiveId = 0;
+            return;
+        }
+
+        archiveIds.AddRange(store.GetArchIds(selectedRecId).OrderBy(x => x));
+
+        if (archiveIds.Count == 0)
+        {
+            selectedArchiveId = 0;
+            return;
+        }
+
+        if (!archiveIds.Contains(selectedArchiveId))
+        {
+            selectedArchiveId = archiveIds[0];
+        }
     }
 
     private async Task OnRecChanged(ChangeEventArgs e)
@@ -137,6 +196,16 @@
         if (int.TryParse(e.Value?.ToString(), out var recId))
         {
             selectedRecId = recId;
+            RebuildArchives();
+            await LoadTableAndDraw();
+        }
+    }
+
+    private async Task OnArchiveChanged(ChangeEventArgs e)
+    {
+        if (byte.TryParse(e.Value?.ToString(), out var archiveId))
+        {
+            selectedArchiveId = archiveId;
             await LoadTableAndDraw();
         }
     }
@@ -163,33 +232,37 @@
         await RebuildAndDraw();
     }
 
+    private async Task OnWindowMinutesChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var value))
+        {
+            windowMinutes = value;
+            await RebuildAndDraw();
+        }
+    }
+
     private async Task LoadTableAndDraw()
     {
-        if (store == null)
+        if (store == null || selectedRecId == 0 || selectedArchiveId == 0)
         {
-            return;
-        }
-
-        var archIds = store.GetArchIds(selectedRecId).ToList();
-        if (archIds.Count == 0)
-        {
-            status = "Pro vybraný objekt nebyly nalezeny archivy.";
+            status = "Nejprve načtěte data v Measurements Table.";
             windows.Clear();
+            table = null;
             await JS.InvokeVoidAsync("boxplotInterop.clear", "thdBoxplotChart");
             return;
         }
 
-        var archId = archIds.First();
-        var pack = store.GetBinPacks(selectedRecId, archId).FirstOrDefault();
+        var pack = store.GetBinPacks(selectedRecId, selectedArchiveId).FirstOrDefault();
         if (pack == null)
         {
             status = "Nebyly nalezeny datové balíčky.";
             windows.Clear();
+            table = null;
             await JS.InvokeVoidAsync("boxplotInterop.clear", "thdBoxplotChart");
             return;
         }
 
-        var typeXml = store.ReadArchDefXml(selectedRecId, archId);
+        var typeXml = store.ReadArchDefXml(selectedRecId, selectedArchiveId);
         var columns = ArchDefParser.ParseColumns(typeXml);
 
         table = UniArchTableParser.ParseMinuteTable(
@@ -197,6 +270,7 @@
             pack.TimeUtc.ToLocalTime(),
             periodMs: 60000,
             maxRows: Math.Clamp(maxRowsToLoad, 300, 200000));
+
         table.Columns.Clear();
         table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
 
@@ -218,23 +292,21 @@
             return;
         }
 
-        var metricSeries = BuildMetricSeries(selectedMetric, out var sourceLabel);
+        var metricSeries = BuildMetricSeries(selectedMetric);
         var filteredSeries = metricSeries
             .Where(x => (!filterFrom.HasValue || x.Time >= filterFrom.Value) && (!filterTo.HasValue || x.Time <= filterTo.Value))
             .ToList();
 
         if (filteredSeries.Count == 0)
         {
-            status = $"Pro metriku '{selectedMetric}' nejsou v daném čase data.";
+            status = "Pro vybranou metriku/interval nejsou data.";
             await JS.InvokeVoidAsync("boxplotInterop.clear", "thdBoxplotChart");
             return;
         }
 
         windows.AddRange(BuildWindowStats(filteredSeries, windowMinutes));
 
-        var filtered = onlyAboveThreshold
-            ? windows.Where(w => w.P95 > threshold).ToList()
-            : windows.ToList();
+        var filtered = onlyAboveThreshold ? windows.Where(w => w.P95 > threshold).ToList() : windows.ToList();
 
         await JS.InvokeVoidAsync(
             "boxplotInterop.renderReadable",
@@ -242,32 +314,17 @@
             filtered.Select(w => w.WindowStart.ToString("MM-dd HH:mm")).ToArray(),
             filtered.Select(w => new[] { w.LowerWhisker, w.Q1, w.Median, w.Q3, w.UpperWhisker }).ToArray(),
             filtered.SelectMany((w, idx) => w.Outliers.Select(v => new object[] { idx, v })).ToArray(),
-            metrics.FirstOrDefault(m => m.Key == selectedMetric)?.Label ?? selectedMetric,
+            selectedMetric,
             threshold,
             thresholdUnit,
             onlyAboveThreshold);
 
-        var exceedCount = windows.Count(w => w.P95 > threshold);
-        status = filtered.Count == 0
-            ? $"Po filtru nezůstala žádná okna: P95 > {threshold:0.###} {thresholdUnit}."
-            : $"Oken: {filtered.Count}/{windows.Count}. Nad prahem P95 > {threshold:0.###} {thresholdUnit}: {exceedCount}. Zdroj: {sourceLabel}. Rozsah: {filteredSeries.First().Time:yyyy-MM-dd HH:mm} .. {filteredSeries.Last().Time:yyyy-MM-dd HH:mm}.";
-    }
-
-    private async Task OnWindowMinutesChanged(ChangeEventArgs e)
-    {
-        if (int.TryParse(e.Value?.ToString(), out var value))
-        {
-            windowMinutes = value;
-            await RebuildAndDraw();
-        }
+        status = $"Objekt {selectedRecId}, archiv {selectedArchiveId}. Oken: {filtered.Count}/{windows.Count}.";
     }
 
     private int? ResolveColumnIndex(string metricName)
     {
-        if (table == null)
-        {
-            return null;
-        }
+        if (table == null) return null;
 
         for (int i = 0; i < table.Columns.Count; i++)
         {
@@ -278,6 +335,7 @@
         }
 
         var normalizedMetric = NormalizeName(metricName);
+
         for (int i = 0; i < table.Columns.Count; i++)
         {
             var normalizedColumn = NormalizeName(table.Columns[i].Name);
@@ -292,13 +350,9 @@
 
     private int? FindClosestColumnIndex(string metricName)
     {
-        if (table == null)
-        {
-            return null;
-        }
+        if (table == null) return null;
 
-        var tokens = NormalizeName(metricName)
-            .Split('_', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var tokens = NormalizeName(metricName).Split('_', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         for (int i = 0; i < table.Columns.Count; i++)
         {
@@ -312,14 +366,9 @@
         return null;
     }
 
-    private List<(DateTime Time, double Value)> BuildMetricSeries(string metricKey, out string sourceLabel)
+    private List<(DateTime Time, double Value)> BuildMetricSeries(string metricKey)
     {
-        sourceLabel = metricKey;
-
-        if (table == null)
-        {
-            return [];
-        }
+        if (table == null) return [];
 
         if (metricKey == "THDU_3ph_avg")
         {
@@ -327,21 +376,15 @@
             var thdu2 = ResolveColumnIndex("Harmonics/THDU_avg_THDU2") ?? FindClosestColumnIndex("THDU2");
             var thdu3 = ResolveColumnIndex("Harmonics/THDU_avg_THDU3") ?? FindClosestColumnIndex("THDU3");
 
-            if (!thdu1.HasValue || !thdu2.HasValue || !thdu3.HasValue)
-            {
-                sourceLabel = "THDU sloupce nebyly nalezeny";
-                return [];
-            }
+            if (!thdu1.HasValue || !thdu2.HasValue || !thdu3.HasValue) return [];
 
-            sourceLabel = "Průměr THDU1/THDU2/THDU3";
             return table.Time
                 .Zip(table.Rows, (t, row) =>
                 {
                     var v1 = thdu1.Value < row.Length ? row[thdu1.Value] : double.NaN;
                     var v2 = thdu2.Value < row.Length ? row[thdu2.Value] : double.NaN;
                     var v3 = thdu3.Value < row.Length ? row[thdu3.Value] : double.NaN;
-                    var avg = (v1 + v2 + v3) / 3d;
-                    return new { Time = t, Value = avg };
+                    return new { Time = t, Value = (v1 + v2 + v3) / 3d };
                 })
                 .Where(x => !double.IsNaN(x.Value) && !double.IsInfinity(x.Value))
                 .Select(x => (x.Time, x.Value))
@@ -354,43 +397,30 @@
             var thdi2 = ResolveColumnIndex("Harmonics/THDI_avg_THDI2") ?? FindClosestColumnIndex("THDI2");
             var thdi3 = ResolveColumnIndex("Harmonics/THDI_avg_THDI3") ?? FindClosestColumnIndex("THDI3");
 
-            if (!thdi1.HasValue || !thdi2.HasValue || !thdi3.HasValue)
-            {
-                sourceLabel = "THDI sloupce nebyly nalezeny";
-                return [];
-            }
+            if (!thdi1.HasValue || !thdi2.HasValue || !thdi3.HasValue) return [];
 
-            sourceLabel = "Průměr THDI1/THDI2/THDI3";
             return table.Time
                 .Zip(table.Rows, (t, row) =>
                 {
                     var v1 = thdi1.Value < row.Length ? row[thdi1.Value] : double.NaN;
                     var v2 = thdi2.Value < row.Length ? row[thdi2.Value] : double.NaN;
                     var v3 = thdi3.Value < row.Length ? row[thdi3.Value] : double.NaN;
-                    var avg = (v1 + v2 + v3) / 3d;
-                    return new { Time = t, Value = avg };
+                    return new { Time = t, Value = (v1 + v2 + v3) / 3d };
                 })
                 .Where(x => !double.IsNaN(x.Value) && !double.IsInfinity(x.Value))
                 .Select(x => (x.Time, x.Value))
                 .ToList();
         }
 
-        var columnIndex = ResolveColumnIndex(metricKey);
-        if (!columnIndex.HasValue)
-        {
-            var fallback = FindClosestColumnIndex(metricKey);
-            if (!fallback.HasValue)
-            {
-                sourceLabel = $"Sloupec '{metricKey}' nebyl nalezen";
-                return [];
-            }
+        var columnIndex = ResolveColumnIndex(metricKey) ?? FindClosestColumnIndex(metricKey);
+        if (!columnIndex.HasValue) return [];
 
-            columnIndex = fallback;
-        }
-
-        sourceLabel = table.Columns[columnIndex.Value].Name;
         return table.Time
-            .Zip(table.Rows, (t, row) => new { Time = t, Value = columnIndex.Value < row.Length ? row[columnIndex.Value] : double.NaN })
+            .Zip(table.Rows, (t, row) => new
+            {
+                Time = t,
+                Value = columnIndex.Value < row.Length ? row[columnIndex.Value] : double.NaN
+            })
             .Where(x => !double.IsNaN(x.Value) && !double.IsInfinity(x.Value))
             .Select(x => (x.Time, x.Value))
             .ToList();
@@ -398,21 +428,16 @@
 
     private IEnumerable<WindowStats> BuildWindowStats(List<(DateTime Time, double Value)> pairs, int windowSizeMinutes)
     {
-        if (pairs.Count == 0)
-        {
-            yield break;
-        }
+        if (pairs.Count == 0) yield break;
 
-        var orderedPairs = pairs
-            .OrderBy(x => x.Time)
-            .ToList();
-
+        var orderedPairs = pairs.OrderBy(x => x.Time).ToList();
         var currentStart = AlignToWindow(orderedPairs[0].Time, windowSizeMinutes);
         var bucket = new List<double>();
 
         foreach (var pair in orderedPairs)
         {
             var windowStart = AlignToWindow(pair.Time, windowSizeMinutes);
+
             if (windowStart != currentStart)
             {
                 if (bucket.Count > 0)
