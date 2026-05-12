@@ -1,0 +1,422 @@
+﻿@page "/stacked-bar"
+@inject HttpClient Http
+@inject IJSRuntime JS
+
+@using DeviceMeasurementsApp.Models
+@using DeviceMeasurementsApp.Services
+
+<h3>Skládaný sloupcový graf: energie a struktura výkonu</h3>
+
+<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+    <button @onclick="LoadAndDraw">Načíst + vykreslit</button>
+
+    <label>Max. řádků:</label>
+    <input type="number" min="500" max="200000" step="500" @bind="maxRowsToLoad" style="width:120px;" />
+
+    <label>Metrika:</label>
+    <select @onchange="OnScenarioChanged" disabled="@(meters.Count == 0)">
+        @foreach (var scenario in scenarios)
+        {
+            <option value="@scenario.Key" selected="@(scenario.Key == selectedScenario)">@scenario.Label</option>
+        }
+    </select>
+
+    <label>Seskupení:</label>
+    <select @onchange="OnRollupChanged" disabled="@(meters.Count == 0)">
+        @foreach (var rollup in rollups)
+        {
+            <option value="@rollup.Key" selected="@(rollup.Key == selectedRollup)">@rollup.Label</option>
+        }
+    </select>
+
+    <label>
+        <input type="checkbox" checked="@isPercentMode" @onchange="OnPercentModeChanged" disabled="@(selectedScenario != "pq_structure")" />
+        100% skládaný režim (pro strukturu P/Q)
+    </label>
+</div>
+
+<p>@status</p>
+
+@if (meters.Count > 0)
+{
+    <div style="margin-bottom:10px; padding:10px 12px; background:#f3f4f6; border:1px solid #d1d5db; display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+        <strong>Vybrané zdroje celkem: @meters.Count(m => m.Enabled)</strong>
+
+        @foreach (var meter in meters)
+        {
+            <label style="display:inline-flex; align-items:center; gap:6px;">
+                <input type="checkbox" checked="@meter.Enabled" @onchange="e => ToggleSource(meter.Id, (bool?)e.Value == true)" />
+                @meter.Name
+            </label>
+        }
+    </div>
+
+    <div style="height:680px; border:1px solid #d6d9df; background:#fafafa; padding:8px;">
+        <canvas id="stackedBarCanvas"></canvas>
+    </div>
+}
+
+@code {
+    private sealed record Rec(int Id, string Name);
+    private sealed record RollupOption(string Key, string Label, TimeSpan BucketSize);
+    private sealed record ScenarioOption(string Key, string Label);
+
+    private sealed class MeterData
+    {
+        public int Id { get; init; }
+        public string Name { get; init; } = string.Empty;
+        public bool Enabled { get; set; } = true;
+        public required UniArchTable Table { get; init; }
+        public required Dictionary<string, int> IndexByName { get; init; }
+        public required Dictionary<string, int> NormalizedIndexByName { get; init; }
+    }
+
+    private sealed class BucketValue
+    {
+        public required DateTime BucketStart { get; init; }
+        public required Dictionary<string, double> ValuesBySeries { get; init; }
+    }
+
+    private readonly List<Rec> recs =
+    [
+        new(58, "EMI1"),
+        new(60, "EMI2"),
+        new(59, "EMI3"),
+        new(1, "MAIN")
+    ];
+
+    private readonly List<RollupOption> rollups =
+    [
+        new("15m", "15 minut", TimeSpan.FromMinutes(15)),
+        new("1h", "1 hodina", TimeSpan.FromHours(1)),
+        new("8h", "8 hodin (směna)", TimeSpan.FromHours(8)),
+        new("24h", "24 hodin (den)", TimeSpan.FromHours(24))
+    ];
+
+    private readonly List<ScenarioOption> scenarios =
+    [
+        new("energy_p", "Integrace P -> E: EMI1 + EMI2 + EMI3"),
+        new("pq_structure", "Struktura činného vs. jalového výkonu (MAIN)")
+    ];
+
+    private string selectedRollup = "1h";
+    private string selectedScenario = "energy_p";
+    private string status = "";
+    private bool isPercentMode;
+    private int maxRowsToLoad = 10000;
+
+    private CeaZipStore? store;
+    private readonly List<MeterData> meters = [];
+
+    private async Task LoadAndDraw()
+    {
+        store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+        meters.Clear();
+
+        foreach (var rec in recs)
+        {
+            var meter = TryLoadMeter(rec);
+            if (meter is null) continue;
+
+            if (meter.Name == "MAIN") meter.Enabled = false;
+            meters.Add(meter);
+        }
+
+        await DrawChart();
+    }
+
+    private MeterData? TryLoadMeter(Rec rec)
+    {
+        if (store is null) return null;
+
+        var archIds = store.GetArchIds(rec.Id).ToList();
+        if (archIds.Count == 0) return null;
+
+        var archId = archIds.First();
+        var pack = store.GetBinPacks(rec.Id, archId).FirstOrDefault();
+        if (pack is null) return null;
+
+        var typeXml = store.ReadArchDefXml(rec.Id, archId);
+        var columns = ArchDefParser.ParseColumns(typeXml);
+
+        var table = UniArchTableParser.ParseMinuteTable(
+            store.Read(pack.Entry),
+            pack.TimeUtc.ToLocalTime(),
+            periodMs: 60000,
+            maxRows: Math.Clamp(maxRowsToLoad, 500, 200000));
+
+        table.Columns.Clear();
+        table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
+
+        var indexByName = table.Columns
+            .Select((c, i) => new { c.Name, Index = i })
+            .GroupBy(x => x.Name)
+            .ToDictionary(g => g.Key, g => g.First().Index, StringComparer.OrdinalIgnoreCase);
+
+        var normalizedIndexByName = table.Columns
+            .Select((c, i) => new { Name = NormalizeName(c.Name), Index = i })
+            .GroupBy(x => x.Name)
+            .ToDictionary(g => g.Key, g => g.First().Index, StringComparer.OrdinalIgnoreCase);
+
+        return new MeterData
+        {
+            Id = rec.Id,
+            Name = rec.Name,
+            Table = table,
+            IndexByName = indexByName,
+            NormalizedIndexByName = normalizedIndexByName
+        };
+    }
+
+    private async Task OnScenarioChanged(ChangeEventArgs e)
+    {
+        selectedScenario = e.Value?.ToString() ?? selectedScenario;
+        if (selectedScenario != "pq_structure") isPercentMode = false;
+
+        await DrawChart();
+    }
+
+    private async Task OnRollupChanged(ChangeEventArgs e)
+    {
+        selectedRollup = e.Value?.ToString() ?? selectedRollup;
+        await DrawChart();
+    }
+
+    private async Task OnPercentModeChanged(ChangeEventArgs e)
+    {
+        isPercentMode = (bool?)e.Value == true;
+        await DrawChart();
+    }
+
+    private async Task ToggleSource(int meterId, bool enabled)
+    {
+        var meter = meters.FirstOrDefault(m => m.Id == meterId);
+        if (meter is null) return;
+
+        meter.Enabled = enabled;
+        await DrawChart();
+    }
+
+    private async Task DrawChart()
+    {
+        if (meters.Count == 0)
+        {
+            status = "Data zatím nejsou načtena.";
+            return;
+        }
+
+        var rollup = rollups.First(x => x.Key == selectedRollup);
+        var buckets = selectedScenario == "energy_p"
+            ? BuildEnergyBuckets(rollup.BucketSize)
+            : BuildPowerStructureBuckets(rollup.BucketSize, isPercentMode);
+
+        if (buckets.Count == 0)
+        {
+            await RenderEmptyChart();
+            return;
+        }
+
+        var labels = buckets.Select(b => b.BucketStart.ToString("dd.MM HH:mm")).ToArray();
+        var seriesKeys = buckets.SelectMany(b => b.ValuesBySeries.Keys).Distinct().ToList();
+        var datasets = BuildDatasets(seriesKeys, buckets);
+
+        var title = selectedScenario == "energy_p"
+            ? $"Integrovaná energie podle zdroje ({rollup.Label})"
+            : $"Struktura P/Q ({rollup.Label})";
+
+        var yAxis = selectedScenario == "energy_p"
+            ? "Energie [Wh]"
+            : isPercentMode ? "Podíl [%]" : "Výkon [W / var]";
+
+        await JS.InvokeVoidAsync(
+            "stackedBarInterop.renderStackedBarChart",
+            "stackedBarCanvas",
+            labels,
+            datasets,
+            title,
+            yAxis,
+            isPercentMode);
+
+        
+    }
+
+    private object[] BuildDatasets(List<string> seriesKeys, List<BucketValue> buckets)
+    {
+        var palette = new Dictionary<string, string>
+        {
+            ["EMI1"] = "#2f7ed8",
+            ["EMI2"] = "#8bbc21",
+            ["EMI3"] = "#910000",
+            ["P_avg_3P"] = "#2563eb",
+            ["Q_avg_3Q"] = "#f97316"
+        };
+
+        return seriesKeys
+            .Select(key => new
+            {
+                label = GetSeriesLabel(key),
+                backgroundColor = palette.TryGetValue(key, out var color) ? color : "#6b7280",
+                data = buckets.Select(bucket => bucket.ValuesBySeries.TryGetValue(key, out var value) ? Math.Round(value, 3) : 0d).ToArray(),
+                stack = "total"
+            })
+            .Cast<object>()
+            .ToArray();
+    }
+
+    private static string GetSeriesLabel(string key)
+    {
+        return key switch
+        {
+            "P_avg_3P" => "Činný výkon",
+            "Q_avg_3Q" => "Jalový výkon",
+            _ => key
+        };
+    }
+
+    private async Task RenderEmptyChart()
+    {
+        status = "Pro aktuální výběr nejsou dostupná data.";
+
+        await JS.InvokeVoidAsync(
+            "stackedBarInterop.renderStackedBarChart",
+            "stackedBarCanvas",
+            Array.Empty<string>(),
+            Array.Empty<object>(),
+            "Bez dat",
+            "Hodnota",
+            false);
+    }
+
+    private List<BucketValue> BuildEnergyBuckets(TimeSpan bucketSize)
+    {
+        var selectedMeters = meters.Where(m => m.Enabled).ToList();
+        var map = new Dictionary<DateTime, Dictionary<string, double>>();
+
+        foreach (var meter in selectedMeters)
+        {
+            var series = BuildSignalPoints(meter, "P_avg_3P").OrderBy(x => x.Time).ToList();
+            if (series.Count == 0) continue;
+
+            DateTime? previousTime = null;
+            foreach (var point in series)
+            {
+                var hours = previousTime.HasValue
+                    ? Math.Max((point.Time - previousTime.Value).TotalHours, 1d / 60d)
+                    : 1d / 60d;
+
+                previousTime = point.Time;
+
+                var bucket = AlignToBucket(point.Time, bucketSize);
+                if (!map.TryGetValue(bucket, out var valuesBySeries))
+                {
+                    valuesBySeries = [];
+                    map[bucket] = valuesBySeries;
+                }
+
+                valuesBySeries.TryGetValue(meter.Name, out var currentValue);
+                valuesBySeries[meter.Name] = currentValue + Math.Max(point.Value, 0d) * hours;
+            }
+        }
+
+        return map
+            .OrderBy(kvp => kvp.Key)
+            .Select(kvp => new BucketValue
+            {
+                BucketStart = kvp.Key,
+                ValuesBySeries = kvp.Value
+            })
+            .ToList();
+    }
+
+    private List<BucketValue> BuildPowerStructureBuckets(TimeSpan bucketSize, bool percentMode)
+    {
+        var selectedMeters = meters.Where(m => m.Enabled).ToList();
+        if (selectedMeters.Count == 0) return [];
+
+        var pByTime = BuildMergedSignal(selectedMeters, "P_avg_3P");
+        var qByTime = BuildMergedSignal(selectedMeters, "Q_avg_3Q");
+
+        var groupedTimes = pByTime.Keys
+            .Intersect(qByTime.Keys)
+            .GroupBy(time => AlignToBucket(time, bucketSize))
+            .OrderBy(group => group.Key);
+
+        var result = new List<BucketValue>();
+
+        foreach (var group in groupedTimes)
+        {
+            var pAverage = group.Select(time => pByTime[time]).DefaultIfEmpty(0).Average();
+            var qAverage = group.Select(time => qByTime[time]).DefaultIfEmpty(0).Average();
+
+            if (percentMode)
+            {
+                (pAverage, qAverage) = ConvertToPercentStructure(pAverage, qAverage);
+            }
+
+            result.Add(new BucketValue
+            {
+                BucketStart = group.Key,
+                ValuesBySeries = new Dictionary<string, double>
+                {
+                    ["P_avg_3P"] = pAverage,
+                    ["Q_avg_3Q"] = qAverage
+                }
+            });
+        }
+
+        return result;
+    }
+
+    private Dictionary<DateTime, double> BuildMergedSignal(List<MeterData> selectedMeters, string signal)
+    {
+        return selectedMeters
+            .SelectMany(meter => BuildSignalPoints(meter, signal).Select(point => new { point.Time, point.Value }))
+            .GroupBy(point => point.Time)
+            .ToDictionary(group => group.Key, group => group.Sum(point => point.Value));
+    }
+
+    private static (double P, double Q) ConvertToPercentStructure(double p, double q)
+    {
+        var total = Math.Abs(p) + Math.Abs(q);
+        if (total <= 0) return (0, 0);
+
+        return (Math.Abs(p) / total * 100d, Math.Abs(q) / total * 100d);
+    }
+
+    private IEnumerable<(DateTime Time, double Value)> BuildSignalPoints(MeterData meter, string signal)
+    {
+        var index = ResolveColumnIndex(meter, signal);
+        if (!index.HasValue) yield break;
+
+        var count = Math.Min(meter.Table.Time.Count, meter.Table.Rows.Count);
+        for (var i = 0; i < count; i++)
+        {
+            if (index.Value >= meter.Table.Rows[i].Length) continue;
+            yield return (meter.Table.Time[i], meter.Table.Rows[i][index.Value]);
+        }
+    }
+
+    private int? ResolveColumnIndex(MeterData meter, string name)
+    {
+        if (meter.IndexByName.TryGetValue(name, out var exact)) return exact;
+
+        var normalized = NormalizeName(name);
+        if (meter.NormalizedIndexByName.TryGetValue(normalized, out var normalizedIndex)) return normalizedIndex;
+
+        var fallback = meter.NormalizedIndexByName.FirstOrDefault(kvp => kvp.Key.EndsWith(normalized, StringComparison.OrdinalIgnoreCase));
+        return fallback.Equals(default(KeyValuePair<string, int>)) ? null : fallback.Value;
+    }
+
+    private static DateTime AlignToBucket(DateTime time, TimeSpan bucket)
+    {
+        if (bucket <= TimeSpan.Zero) return time;
+
+        var ticks = time.Ticks - time.Ticks % bucket.Ticks;
+        return new DateTime(ticks, time.Kind);
+    }
+
+    private static string NormalizeName(string value)
+    {
+        return string.Concat(value.Where(ch => char.IsLetterOrDigit(ch) || ch == '_')).ToUpperInvariant();
+    }
+}

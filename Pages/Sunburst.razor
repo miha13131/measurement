@@ -1,0 +1,623 @@
+﻿@page "/sunburst"
+@inject HttpClient Http
+@inject IJSRuntime JS
+
+@using DeviceMeasurementsApp.Models
+@using DeviceMeasurementsApp.Services
+
+<h3>Sunburst: podíl zdrojů (pouze vhodné agregace)</h3>
+
+<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+    <button @onclick="LoadAndDraw">Načíst + vykreslit</button>
+    <button @onclick="RefreshSpotPriceAsync">Aktualizovat spot cenu</button>
+
+    <label>Načíst řádků:</label>
+    <select @onchange="OnMaxRowsChanged">
+        @foreach (var option in maxRowsOptions)
+        {
+            <option value="@option" selected="@(option == selectedMaxRows)">@option</option>
+        }
+    </select>
+
+    <label>Základ agregace:</label>
+    <select @onchange="OnBasisChanged" disabled="@(meters.Count == 0)">
+        @foreach (var basis in aggregationBases)
+        {
+            <option value="@basis.Key" selected="@(basis.Key == selectedBasis)">@basis.Label</option>
+        }
+    </select>
+</div>
+
+<div style="margin-bottom:10px; font-size:14px; color:#1f2937;">
+    <strong>Aktuální spot cena:</strong> @currentSpotPriceCzkPerKwh.ToString("0.###") Kč/kWh
+    @if (spotPriceUpdatedAt.HasValue)
+    {
+        <span style="margin-left:8px; color:#4b5563;">(aktualizováno: @spotPriceUpdatedAt.Value.ToString("dd.MM HH:mm:ss"))</span>
+    }
+    <div style="font-size:12px; color:#6b7280;">@spotPriceStatus</div>
+</div>
+
+@if (meters.Count > 0)
+{
+    <div style="margin-bottom:10px; padding:10px 12px; background:#f3f4f6; border:1px solid #d1d5db; display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+        <strong>Vybrané zdroje celkem: @meters.Count(m => m.Enabled)</strong>
+        @foreach (var meter in meters)
+        {
+            <label style="display:inline-flex; align-items:center; gap:6px;">
+                <input type="checkbox" checked="@meter.Enabled" @onchange="(e => ToggleSource(meter.Id, (bool?)e.Value == true))" />
+                @meter.Name
+            </label>
+        }
+    </div>
+}
+
+@if (zoneLegend.Count > 0 || deviceLegend.Count > 0)
+{
+    <div style="margin-bottom:10px; padding:10px 12px; border:1px solid #d1d5db; background:#ffffff;">
+        <div style="display:flex; flex-wrap:wrap; gap:18px; align-items:center; margin-bottom:8px;">
+            <strong style="font-size:15px;">Zóny:</strong>
+            @foreach (var item in zoneLegend)
+            {
+                <div style="display:flex; align-items:center; gap:8px; font-size:15px;">
+                    <span style="display:inline-block; width:16px; height:16px; border-radius:3px; background:@item.Color;"></span>
+                    <span>@item.Name</span>
+                </div>
+            }
+        </div>
+        <div style="display:flex; flex-wrap:wrap; gap:18px; align-items:center;">
+            <strong style="font-size:15px;">Zařízení:</strong>
+            @foreach (var item in deviceLegend)
+            {
+                <div style="display:flex; align-items:center; gap:8px; font-size:15px;">
+                    <span style="display:inline-block; width:16px; height:16px; border-radius:3px; background:@item.Color;"></span>
+                    <span>@item.Name</span>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+<p>@status</p>
+
+@if (meters.Count > 0)
+{
+    <div style="height:680px; border:1px solid #d6d9df; background:#fafafa; padding:8px;">
+        <div id="sunburstChart" style="width:100%; height:100%;"></div>
+    </div>
+}
+
+@code {
+    private sealed record Rec(int Id, string Name);
+    private sealed record AggregationBasis(string Key, string Label);
+
+    private sealed class MeterData
+    {
+        public int Id { get; init; }
+        public string Name { get; init; } = string.Empty;
+        public bool Enabled { get; set; } = true;
+        public required UniArchTable Table { get; init; }
+        public required Dictionary<string, int> IndexByName { get; init; }
+        public required Dictionary<string, int> NormalizedIndexByName { get; init; }
+    }
+
+    private readonly List<Rec> recs =
+    [
+        new(58, "EMI1"),
+        new(60, "EMI2"),
+        new(59, "EMI3"),
+        new(1, "MAIN")
+    ];
+
+    private readonly List<AggregationBasis> aggregationBases =
+    [
+        new("energy_p_share", "Podíl podle integrované aktivní energie Σ(P·Δt)"),
+        new("power_avg_p_share", "Podíl podle průměrného aktivního výkonu AVG(P_avg_3P)"),
+        new("cost_energy_share", "Podíl podle odhadované ceny z energie (Σ(P·Δt) × spot cena)"),
+        new("power_avg_kw_share", "Podíl podle průměrného výkonu v kW AVG(P_avg_3P/1000)"),
+        new("power_avg_s_share", "Podíl podle průměrného zdánlivého výkonu AVG(S_avg_3S)"),
+        new("power_peak_p_share", "Podíl podle špičky aktivního výkonu MAX(P_avg_3P)"),
+        new("cost_hour_share", "Podíl podle odhadované hodinové ceny ((AVG(P)/1000) × spot cena)")
+    ];
+
+    private readonly List<int> maxRowsOptions = [500, 2000, 5000, 10000, 20000];
+
+    private string selectedBasis = "energy_p_share";
+    private int selectedMaxRows = 5000;
+    private string status = "";
+    private double currentSpotPriceCzkPerKwh = 8.5d;
+    private DateTime? spotPriceUpdatedAt;
+    private string spotPriceStatus = "Výchozí cena: 8.5 Kč/kWh";
+    private readonly List<(string Name, string Color)> deviceLegend = [];
+    private readonly List<(string Name, string Color)> zoneLegend = [];
+
+    private CeaZipStore? store;
+    private readonly List<MeterData> meters = [];
+
+    private async Task LoadAndDraw()
+    {
+        await RefreshSpotPriceAsync();
+        store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+
+        meters.Clear();
+
+        foreach (var rec in recs)
+        {
+            var meter = TryLoadMeter(rec);
+            if (meter != null)
+            {
+                if (meter.Name == "MAIN")
+                {
+                    meter.Enabled = false;
+                }
+                meters.Add(meter);
+            }
+        }
+
+        await DrawSunburst();
+    }
+
+    private MeterData? TryLoadMeter(Rec rec)
+    {
+        if (store == null)
+        {
+            return null;
+        }
+
+        var archIds = store.GetArchIds(rec.Id).ToList();
+        if (archIds.Count == 0)
+        {
+            return null;
+        }
+
+        var archId = archIds.First();
+        var pack = store.GetBinPacks(rec.Id, archId).FirstOrDefault();
+        if (pack == null)
+        {
+            return null;
+        }
+
+        var typeXml = store.ReadArchDefXml(rec.Id, archId);
+        var columns = ArchDefParser.ParseColumns(typeXml);
+
+        var table = UniArchTableParser.ParseMinuteTable(
+            store.Read(pack.Entry),
+            pack.TimeUtc.ToLocalTime(),
+            periodMs: 60000,
+            maxRows: selectedMaxRows);
+
+        table.Columns.Clear();
+        table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
+
+        var indexByName = table.Columns
+            .Select((c, i) => new { c.Name, Index = i })
+            .GroupBy(x => x.Name)
+            .ToDictionary(g => g.Key, g => g.First().Index, StringComparer.OrdinalIgnoreCase);
+
+        var normalizedIndexByName = table.Columns
+            .Select((c, i) => new { Name = NormalizeName(c.Name), Index = i })
+            .GroupBy(x => x.Name)
+            .ToDictionary(g => g.Key, g => g.First().Index, StringComparer.OrdinalIgnoreCase);
+
+        return new MeterData
+        {
+            Id = rec.Id,
+            Name = rec.Name,
+            Table = table,
+            IndexByName = indexByName,
+            NormalizedIndexByName = normalizedIndexByName
+        };
+    }
+
+    private async Task ToggleSource(int meterId, bool enabled)
+    {
+        var meter = meters.FirstOrDefault(m => m.Id == meterId);
+        if (meter == null)
+        {
+            return;
+        }
+
+        meter.Enabled = enabled;
+        await DrawSunburst();
+    }
+
+    private async Task OnBasisChanged(ChangeEventArgs e)
+    {
+        selectedBasis = e.Value?.ToString() ?? selectedBasis;
+        await DrawSunburst();
+    }
+
+    private Task OnMaxRowsChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var rows) && rows > 0)
+        {
+            selectedMaxRows = rows;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task RefreshSpotPriceAsync()
+    {
+        string[] endpoints =
+        [
+            "https://spotovaelektrina.cz/api/v1/price/get-actual-price-czk",
+            "https://spotovaelektrina.cz/v1/price/get-actual-price-czk"
+        ];
+
+        foreach (var endpoint in endpoints)
+        {
+            try
+            {
+                var content = await Http.GetStringAsync(endpoint);
+
+                if (double.TryParse(content.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var plain) && plain > 0)
+                {
+                    var normalized = NormalizeToCzkPerKwh(plain);
+                    currentSpotPriceCzkPerKwh = normalized.PriceCzkPerKwh;
+                    spotPriceUpdatedAt = DateTime.Now;
+                    spotPriceStatus = $"Cena načtena z API: {endpoint}. {normalized.Note}";
+                    return;
+                }
+
+                using var doc = System.Text.Json.JsonDocument.Parse(content);
+                var found = TryExtractPrice(doc.RootElement);
+                if (found.HasValue && found.Value > 0)
+                {
+                    var normalized = NormalizeToCzkPerKwh(found.Value);
+                    currentSpotPriceCzkPerKwh = normalized.PriceCzkPerKwh;
+                    spotPriceUpdatedAt = DateTime.Now;
+                    spotPriceStatus = $"Cena načtena z API: {endpoint}. {normalized.Note}";
+                    return;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        spotPriceStatus = $"API není dostupné, používám {currentSpotPriceCzkPerKwh:0.###} Kč/kWh.";
+    }
+
+    private static (double PriceCzkPerKwh, string Note) NormalizeToCzkPerKwh(double apiValue)
+    {
+        if (apiValue > 100)
+        {
+            var converted = apiValue / 1000d;
+            return (converted, $"Detekováno jako Kč/MWh ({apiValue:0.###}) -> {converted:0.###} Kč/kWh.");
+        }
+
+        return (apiValue, $"Detekováno jako Kč/kWh ({apiValue:0.###}).");
+    }
+
+    private static double? TryExtractPrice(System.Text.Json.JsonElement root)
+    {
+        string[] priorityKeys =
+        [
+            "price_czk",
+            "actual_price_czk",
+            "actualPriceCzk",
+            "price",
+            "current_price",
+            "currentPrice"
+        ];
+
+        if (root.ValueKind == System.Text.Json.JsonValueKind.Object)
+        {
+            foreach (var key in priorityKeys)
+            {
+                if (root.TryGetProperty(key, out var value) && TryParseJsonNumber(value, out var parsed))
+                {
+                    return parsed;
+                }
+            }
+
+            foreach (var property in root.EnumerateObject())
+            {
+                var nested = TryExtractPrice(property.Value);
+                if (nested.HasValue)
+                {
+                    return nested;
+                }
+            }
+        }
+        else if (root.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            foreach (var item in root.EnumerateArray())
+            {
+                var nested = TryExtractPrice(item);
+                if (nested.HasValue)
+                {
+                    return nested;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryParseJsonNumber(System.Text.Json.JsonElement element, out double value)
+    {
+        if (element.ValueKind == System.Text.Json.JsonValueKind.Number && element.TryGetDouble(out value))
+        {
+            return true;
+        }
+
+        if (element.ValueKind == System.Text.Json.JsonValueKind.String &&
+            double.TryParse(element.GetString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value))
+        {
+            return true;
+        }
+
+        value = 0;
+        return false;
+    }
+
+    private async Task DrawSunburst()
+    {
+        deviceLegend.Clear();
+        zoneLegend.Clear();
+
+        var selectedMeters = meters.Where(m => m.Enabled).ToList();
+        if (selectedMeters.Count == 0)
+        {
+            status = "Vyberte alespoň jeden zdroj.";
+            await JS.InvokeVoidAsync("sunburstInterop.renderSunburst", "sunburstChart", "Bez dat", Array.Empty<object>(), "", "", Array.Empty<object>());
+            return;
+        }
+
+        var totals = selectedMeters
+            .Select(m => (m.Name, Value: CalculateBasisValue(m, selectedBasis)))
+            .Where(x => !double.IsNaN(x.Value) && !double.IsInfinity(x.Value) && x.Value > 0)
+            .ToList();
+
+        var total = totals.Sum(x => x.Value);
+        if (total <= 0)
+        {
+            status = "Není dost kladných hodnot pro vytvoření podílu v sunburstu.";
+            await JS.InvokeVoidAsync("sunburstInterop.renderSunburst", "sunburstChart", "Bez dat", Array.Empty<object>(), "", "", Array.Empty<object>());
+            return;
+        }
+
+        var rawUnit = GetRawUnit(selectedBasis);
+        var centerLabel = BuildCenterLabel(selectedBasis, total, rawUnit);
+        var legendItems = new List<object>();
+        var zoneNodes = new List<object>();
+        var groupedByZone = totals
+            .GroupBy(x => GetZoneName(x.Name))
+            .OrderBy(g => g.Key)
+            .ToList();
+
+        foreach (var zone in groupedByZone)
+        {
+            var zoneRaw = zone.Sum(x => x.Value);
+            var zoneColor = GetZoneColor(zone.Key);
+            var zoneChildren = new List<object>();
+
+            foreach (var meter in zone.OrderByDescending(x => x.Value))
+            {
+                var color = GetDeviceColor(meter.Name);
+                zoneChildren.Add(new
+                {
+                    name = meter.Name,
+                    value = Math.Round((meter.Value / total) * 100d, 3),
+                    rawValue = Math.Round(meter.Value, 3),
+                    rawUnit,
+                    itemStyle = new { color }
+                });
+
+                if (!deviceLegend.Any(x => x.Name == meter.Name))
+                {
+                    deviceLegend.Add((meter.Name, color));
+                    legendItems.Add(new { name = meter.Name, color });
+                }
+            }
+
+            zoneNodes.Add(new
+            {
+                name = zone.Key,
+                value = Math.Round((zoneRaw / total) * 100d, 3),
+                rawValue = Math.Round(zoneRaw, 3),
+                rawUnit,
+                itemStyle = new { color = zoneColor },
+                children = zoneChildren.ToArray()
+            });
+
+            if (!zoneLegend.Any(x => x.Name == zone.Key))
+            {
+                zoneLegend.Add((zone.Key, zoneColor));
+            }
+        }
+
+        var data = zoneNodes.ToArray();
+
+        var title = selectedBasis switch
+        {
+            "energy_p_share" => "Sunburst: podíl podle integrované aktivní energie [%]",
+            "power_avg_p_share" => "Sunburst: podíl podle průměrného aktivního výkonu [%]",
+            "power_avg_kw_share" => "Sunburst: podíl podle průměrného výkonu v kW [%]",
+            "power_avg_s_share" => "Sunburst: podíl podle průměrného zdánlivého výkonu [%]",
+            "power_peak_p_share" => "Sunburst: podíl podle špičky aktivního výkonu [%]",
+            "cost_energy_share" => "Sunburst: podíl podle odhadované ceny z energie [%]",
+            "cost_hour_share" => "Sunburst: podíl podle odhadované hodinové ceny [%]",
+            _ => "Sunburst: podíl [%]"
+        };
+
+        await JS.InvokeVoidAsync("sunburstInterop.renderSunburst", "sunburstChart", title, data, rawUnit, centerLabel, legendItems.ToArray());
+    }
+
+    private double CalculateBasisValue(MeterData meter, string basisKey)
+    {
+        return basisKey switch
+        {
+            "energy_p_share" => CalculateEnergyIntegral(meter, "P_avg_3P"),
+            "energy_q_share" => CalculateEnergyIntegral(meter, "Q_avg_3Q"),
+            "power_avg_p_share" => CalculateAverageSignal(meter, "P_avg_3P"),
+            "power_avg_kw_share" => CalculateAverageSignal(meter, "P_avg_3P") / 1000d,
+            "power_avg_s_share" => CalculateAverageSignal(meter, "S_avg_3S"),
+            "power_peak_p_share" => CalculatePeakSignal(meter, "P_avg_3P"),
+            "cost_energy_share" => (CalculateEnergyIntegral(meter, "P_avg_3P") / 1000d) * currentSpotPriceCzkPerKwh,
+            "cost_hour_share" => (CalculateAverageSignal(meter, "P_avg_3P") / 1000d) * currentSpotPriceCzkPerKwh,
+            _ => CalculateEnergyIntegral(meter, "P_avg_3P")
+        };
+    }
+
+    private static string GetRawUnit(string basisKey)
+    {
+        return basisKey switch
+        {
+            "energy_p_share" => "Wh",
+            "energy_q_share" => "varh",
+            "power_avg_p_share" => "W",
+            "power_avg_kw_share" => "kW",
+            "power_avg_s_share" => "VA",
+            "power_peak_p_share" => "W",
+            "cost_energy_share" => "Kč",
+            "cost_hour_share" => "Kč/h",
+            _ => ""
+        };
+    }
+
+    private static string BuildCenterLabel(string basisKey, double total, string unit)
+    {
+        var metricName = basisKey switch
+        {
+            "energy_p_share" => "energie",
+            "power_avg_p_share" => "výkon",
+            "cost_energy_share" => "cena",
+            _ => "agregace"
+        };
+
+        return $"Celkem ({metricName})\n{FormatCompact(total)} {unit}";
+    }
+
+    private static string GetZoneName(string meterName)
+    {
+        return meterName switch
+        {
+            "EMI1" => "Zóna A",
+            "EMI2" => "Zóna A",
+            "EMI3" => "Zóna B",
+            "MAIN" => "Hlavní přívod",
+            _ => "Ostatní"
+        };
+    }
+
+    private static string GetZoneColor(string zoneName)
+    {
+        return zoneName switch
+        {
+            "Zóna A" => "#1D4ED8",
+            "Zóna B" => "#059669",
+            "Hlavní přívod" => "#D97706",
+            _ => "#7C3AED"
+        };
+    }
+
+    private static string GetDeviceColor(string meterName)
+    {
+        return meterName switch
+        {
+            "EMI1" => "#2563EB",
+            "EMI2" => "#60A5FA",
+            "EMI3" => "#10B981",
+            "MAIN" => "#F59E0B",
+            _ => "#8B5CF6"
+        };
+    }
+
+    private static string FormatCompact(double value)
+    {
+        var abs = Math.Abs(value);
+        if (abs >= 1_000_000) return $"{value / 1_000_000:0.0}M";
+        if (abs >= 1_000) return $"{value / 1_000:0.0}K";
+        return value.ToString("0.0");
+    }
+
+    private double CalculateEnergyIntegral(MeterData meter, string signal)
+    {
+        var points = BuildSignalPoints(meter, signal).OrderBy(p => p.Time).ToList();
+        if (points.Count == 0)
+        {
+            return 0;
+        }
+
+        double totalWh = 0;
+        DateTime? previousTime = null;
+
+        foreach (var point in points)
+        {
+            var dtHours = previousTime.HasValue
+                ? Math.Max((point.Time - previousTime.Value).TotalHours, 1d / 60d)
+                : 1d / 60d;
+
+            previousTime = point.Time;
+            totalWh += Math.Max(point.Value, 0) * dtHours;
+        }
+
+        return totalWh;
+    }
+
+    private double CalculateAverageSignal(MeterData meter, string signal)
+    {
+        var values = BuildSignalPoints(meter, signal)
+            .Select(x => x.Value)
+            .Where(v => !double.IsNaN(v) && !double.IsInfinity(v) && v > 0)
+            .ToList();
+
+        return values.Count == 0 ? 0 : values.Average();
+    }
+
+    private double CalculatePeakSignal(MeterData meter, string signal)
+    {
+        var values = BuildSignalPoints(meter, signal)
+            .Select(x => x.Value)
+            .Where(v => !double.IsNaN(v) && !double.IsInfinity(v) && v > 0)
+            .ToList();
+
+        return values.Count == 0 ? 0 : values.Max();
+    }
+
+    private IEnumerable<(DateTime Time, double Value)> BuildSignalPoints(MeterData meter, string signal)
+    {
+        int count = Math.Min(meter.Table.Time.Count, meter.Table.Rows.Count);
+        var idx = ResolveColumnIndex(meter, signal);
+        if (!idx.HasValue)
+        {
+            yield break;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            if (idx.Value >= meter.Table.Rows[i].Length)
+            {
+                continue;
+            }
+
+            yield return (meter.Table.Time[i], meter.Table.Rows[i][idx.Value]);
+        }
+    }
+
+    private int? ResolveColumnIndex(MeterData meter, string name)
+    {
+        if (meter.IndexByName.TryGetValue(name, out var exact))
+        {
+            return exact;
+        }
+
+        var normalized = NormalizeName(name);
+        if (meter.NormalizedIndexByName.TryGetValue(normalized, out var normalizedIndex))
+        {
+            return normalizedIndex;
+        }
+
+        var fallback = meter.NormalizedIndexByName
+            .FirstOrDefault(kvp => kvp.Key.EndsWith(normalized, StringComparison.OrdinalIgnoreCase));
+
+        return fallback.Equals(default(KeyValuePair<string, int>)) ? null : fallback.Value;
+    }
+
+    private static string NormalizeName(string value)
+    {
+        return string.Concat(value.Where(ch => char.IsLetterOrDigit(ch) || ch == '_')).ToUpperInvariant();
+    }
+}

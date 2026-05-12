@@ -1,0 +1,271 @@
+﻿@page "/measurements-table"
+@using Microsoft.AspNetCore.Components.Forms
+@using DeviceMeasurementsApp.Models
+@using DeviceMeasurementsApp.Services
+@inject HttpClient Http
+
+<h3>Tabulka měření</h3>
+
+<p>Nahrajte soubor <code>.cea</code>, vyberte záznam / archiv / balíček a zobrazte data v tabulce.</p>
+
+<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+    <InputFile id="ceaFileInput"
+               OnChange="OnFileSelected"
+               accept=".cea"
+               style="position:absolute; left:-9999px;" />
+
+    <label for="ceaFileInput"
+           style="padding:6px 12px; border:1px solid #999; background:#f3f4f6; cursor:pointer; margin:0; display:inline-block;">
+        Vybrat soubor
+    </label>
+
+    <span style="color:#374151;">
+        @(string.IsNullOrWhiteSpace(selectedFileName) ? "Není vybrán žádný soubor" : selectedFileName)
+    </span>
+
+    <button @onclick="LoadDemoFile">Načíst ukázkový soubor</button>
+
+    <label>Záznam:</label>
+    <select @onchange="OnRecordChanged" disabled="@(records.Count == 0)">
+        @foreach (var rec in records)
+        {
+            <option value="@rec.Id" selected="@(rec.Id == selectedRecordId)">@rec.Name (@rec.Id)</option>
+        }
+    </select>
+
+    <label>Archiv:</label>
+    <select @onchange="OnArchiveChanged" disabled="@(archiveIds.Count == 0)">
+        @foreach (var archId in archiveIds)
+        {
+            <option value="@archId" selected="@(archId == selectedArchiveId)">@archId</option>
+        }
+    </select>
+
+    <label>Čas balíčku:</label>
+    <select @bind="selectedPackEntry" disabled="@(packs.Count == 0)">
+        @foreach (var pack in packs)
+        {
+            <option value="@pack.Entry">@pack.TimeUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</option>
+        }
+    </select>
+
+    <label>Počet řádků:</label>
+    <input type="number" min="10" max="10000" step="10" @bind="maxRows" disabled="@(store is null)" />
+
+    <button @onclick="LoadSelectedData" disabled="@(store is null || string.IsNullOrWhiteSpace(selectedPackEntry))">
+        Zobrazit tabulku
+    </button>
+</div>
+
+<p>@status</p>
+
+@if (table is not null)
+{
+    <h4>Tabulka: @SelectedRecordName</h4>
+
+    <div style="overflow:auto; max-height:500px; border:1px solid #ddd;">
+        <table class="table table-sm table-striped" style="margin-bottom:0;">
+            <thead>
+                <tr>
+                    <th>Čas</th>
+                    @foreach (var c in table.Columns)
+                    {
+                        <th>@c.DisplayName</th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @for (var i = 0; i < table.Rows.Count; i++)
+                {
+                    <tr>
+                        <td>@table.Time[i].ToString("HH:mm")</td>
+                        @for (var c = 0; c < Math.Min(table.Columns.Count, table.Rows[i].Length); c++)
+                        {
+                            <td>@table.Rows[i][c].ToString("0.###")</td>
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private CeaZipStore? store;
+    private UniArchTable? table;
+
+    private readonly List<CeaZipStore.RecRef> records = [];
+    private readonly List<byte> archiveIds = [];
+    private readonly List<CeaZipStore.BinPackRef> packs = [];
+
+    private int selectedRecordId;
+    private byte selectedArchiveId;
+    private string selectedPackEntry = string.Empty;
+    private int maxRows = 500;
+
+    private string selectedFileName = string.Empty;
+    private string status = "Čekání na nahrání souboru .cea…";
+
+    private string SelectedRecordName =>
+        records.FirstOrDefault(x => x.Id == selectedRecordId)?.Name ?? $"Objekt {selectedRecordId}";
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            var file = e.File;
+            selectedFileName = file.Name;
+
+            await using var stream = file.OpenReadStream(maxAllowedSize: 200 * 1024 * 1024);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+
+            store = CeaZipStore.FromBytes(ms.ToArray());
+            table = null;
+
+            status = $"Soubor načten: {file.Name}.";
+            RefreshSelections();
+        }
+        catch (Exception ex)
+        {
+            ResetAll();
+            status = $"Nepodařilo se načíst soubor: {ex.Message}";
+        }
+    }
+
+    private async Task LoadDemoFile()
+    {
+        try
+        {
+            store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+            table = null;
+            selectedFileName = "Ukázkový soubor";
+            status = "Ukázkový soubor byl načten.";
+            RefreshSelections();
+        }
+        catch (Exception ex)
+        {
+            ResetAll();
+            status = $"Nepodařilo se načíst ukázkový soubor: {ex.Message}";
+        }
+    }
+
+    private void RefreshSelections()
+    {
+        records.Clear();
+        archiveIds.Clear();
+        packs.Clear();
+
+        if (store is null)
+        {
+            return;
+        }
+
+        records.AddRange(store.GetRecords());
+
+        selectedRecordId = records.FirstOrDefault()?.Id ?? 0;
+        RebuildArchives();
+    }
+
+    private void RebuildArchives()
+    {
+        archiveIds.Clear();
+        packs.Clear();
+        selectedPackEntry = string.Empty;
+
+        if (store is null || selectedRecordId == 0)
+        {
+            return;
+        }
+
+        archiveIds.AddRange(store.GetArchIds(selectedRecordId));
+        selectedArchiveId = archiveIds.FirstOrDefault();
+
+        RebuildPacks();
+    }
+
+    private void RebuildPacks()
+    {
+        packs.Clear();
+        selectedPackEntry = string.Empty;
+
+        if (store is null || selectedRecordId == 0)
+        {
+            return;
+        }
+
+        packs.AddRange(store.GetBinPacks(selectedRecordId, selectedArchiveId).OrderByDescending(x => x.TimeUtc));
+        selectedPackEntry = packs.FirstOrDefault()?.Entry ?? string.Empty;
+    }
+
+    private Task OnRecordChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var recId))
+        {
+            selectedRecordId = recId;
+            table = null;
+            RebuildArchives();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private Task OnArchiveChanged(ChangeEventArgs e)
+    {
+        if (byte.TryParse(e.Value?.ToString(), out var archId))
+        {
+            selectedArchiveId = archId;
+            table = null;
+            RebuildPacks();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private Task LoadSelectedData()
+    {
+        if (store is null || selectedRecordId == 0 || string.IsNullOrWhiteSpace(selectedPackEntry))
+        {
+            status = "Nahrajte prosím soubor a vyberte záznam i balíček.";
+            return Task.CompletedTask;
+        }
+
+        var pack = packs.FirstOrDefault(x => x.Entry == selectedPackEntry);
+        if (pack is null)
+        {
+            status = "Vybraný balíček nebyl nalezen.";
+            table = null;
+            return Task.CompletedTask;
+        }
+
+        var bytes = store.Read(pack.Entry);
+        var typeXml = store.ReadArchDefXml(selectedRecordId, selectedArchiveId);
+        var columns = ArchDefParser.ParseColumns(typeXml);
+
+        table = UniArchTableParser.ParseMinuteTable(
+            bytes,
+            pack.TimeUtc.ToLocalTime(),
+            periodMs: 60000,
+            maxRows: Math.Clamp(maxRows, 10, 10000));
+
+        table.Columns.Clear();
+        table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
+
+        return Task.CompletedTask;
+    }
+
+    private void ResetAll()
+    {
+        store = null;
+        table = null;
+
+        records.Clear();
+        archiveIds.Clear();
+        packs.Clear();
+
+        selectedRecordId = 0;
+        selectedArchiveId = 0;
+        selectedPackEntry = string.Empty;
+        selectedFileName = string.Empty;
+    }
+}

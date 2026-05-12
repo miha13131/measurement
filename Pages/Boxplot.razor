@@ -1,0 +1,458 @@
+﻿@page "/boxplot"
+@inject HttpClient Http
+@inject IJSRuntime JS
+
+@using DeviceMeasurementsApp.Models
+@using DeviceMeasurementsApp.Services
+
+<h3>Krabicový graf</h3>
+
+<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px;">
+    <button @onclick="LoadAndDraw">Načíst + vykreslit</button>
+
+    <label>Max. řádků:</label>
+    <input type="number" min="300" max="200000" step="300" @bind="maxRowsToLoad" style="width:110px;" />
+
+    <label>Zdroj:</label>
+    <select @onchange="OnRecChanged" disabled="@(!isLoaded)">
+        @foreach (var rec in recs)
+        {
+            <option value="@rec.Id" selected="@(rec.Id == selectedRecId)">@rec.Name</option>
+        }
+    </select>
+
+    <label>Metrika:</label>
+    <select @onchange="OnMetricChanged" disabled="@(table == null)">
+        @foreach (var m in metrics)
+        {
+            <option value="@m.Key" selected="@(m.Key == selectedMetric)">@m.Label</option>
+        }
+    </select>
+
+    <label>P95 &gt;</label>
+    <input type="number" step="0.1" value="@thresholdText" @onchange="OnThresholdChanged" style="width:90px;" />
+    <span>@thresholdUnit</span>
+
+    <label>Okno [min]:</label>
+    <select @onchange="OnWindowMinutesChanged">
+        @foreach (var w in windowOptions)
+        {
+            <option value="@w" selected="@(w == windowMinutes)">@w</option>
+        }
+    </select>
+
+    <label>Od:</label>
+    <input type="datetime-local" value="@filterFromInput" @onchange="OnFilterFromChanged" />
+
+    <label>Do:</label>
+    <input type="datetime-local" value="@filterToInput" @onchange="OnFilterToChanged" />
+
+    <label>
+        <input type="checkbox" checked="@onlyAboveThreshold" @onchange="OnOnlyAboveThresholdChanged" />
+        Pouze okna nad prahem
+    </label>
+</div>
+
+<p>@status</p>
+
+@if (windows.Count > 0)
+{
+    <div style="height:680px; border:1px solid #d6d9df; background:#fafafa; padding:8px;">
+        <div id="thdBoxplotChart" style="width:100%; height:100%;"></div>
+    </div>
+}
+
+@code {
+    private sealed record Rec(int Id, string Name);
+    private sealed record Metric(string Key, string Label, string ChartLabel, string Unit);
+    private sealed record WindowStats(DateTime WindowStart, double Min, double Q1, double Median, double Q3, double Max, double P95, double LowerWhisker, double UpperWhisker, List<double> Outliers);
+
+    private readonly List<Rec> recs =
+    [
+        new(58, "EMI1"),
+        new(60, "EMI2"),
+        new(59, "EMI3"),
+        new(1, "MAIN")
+    ];
+
+    private readonly List<Metric> metrics =
+    [
+        new("U_avg_U1", "Napětí L1 (U_avg_U1)", "Napětí L1", "V"),
+        new("U_avg_U2", "Napětí L2 (U_avg_U2)", "Napětí L2", "V"),
+        new("U_avg_U3", "Napětí L3 (U_avg_U3)", "Napětí L3", "V"),
+        new("THDI_3ph_avg", "THDI průměr 3 fází", "THDI", "%"),
+        new("THDU_3ph_avg", "THDU průměr 3 fází", "THDU", "%"),
+        new("I_avg_I1", "Proud L1 (I_avg_I1)", "Proud L1", "A"),
+        new("I_avg_I2", "Proud L2 (I_avg_I2)", "Proud L2", "A"),
+        new("I_avg_I3", "Proud L3 (I_avg_I3)", "Proud L3", "A"),
+        new("P_avg_3P", "Aktivní výkon celkem (P_avg_3P)", "Aktivní výkon", "W")
+    ];
+
+    private readonly List<WindowStats> windows = [];
+    private readonly int[] windowOptions = [10, 15, 30, 60];
+
+    private CeaZipStore? store;
+    private UniArchTable? table;
+
+    private bool isLoaded;
+    private bool onlyAboveThreshold;
+    private int selectedRecId = 58;
+    private int maxRowsToLoad = 1000;
+    private int windowMinutes = 10;
+    private string selectedMetric = "U_avg_U1";
+    private string filterFromInput = "";
+    private string filterToInput = "";
+    private string status = "";
+    private double threshold = 8.0;
+    private DateTime? filterFrom;
+    private DateTime? filterTo;
+
+    private string thresholdText => threshold.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+    private string thresholdUnit => metrics.FirstOrDefault(m => m.Key == selectedMetric)?.Unit ?? string.Empty;
+
+    private async Task LoadAndDraw()
+    {
+        store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+        isLoaded = true;
+        await LoadTableAndDraw();
+    }
+
+    private async Task OnRecChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var recId))
+        {
+            selectedRecId = recId;
+            await LoadTableAndDraw();
+        }
+    }
+
+    private async Task OnMetricChanged(ChangeEventArgs e)
+    {
+        selectedMetric = e.Value?.ToString() ?? selectedMetric;
+        await RebuildAndDraw();
+    }
+
+    private async Task OnThresholdChanged(ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var value))
+        {
+            threshold = value;
+        }
+
+        await RebuildAndDraw();
+    }
+
+    private async Task OnOnlyAboveThresholdChanged(ChangeEventArgs e)
+    {
+        onlyAboveThreshold = (bool?)e.Value == true;
+        await RebuildAndDraw();
+    }
+
+    private async Task OnFilterFromChanged(ChangeEventArgs e)
+    {
+        filterFromInput = e.Value?.ToString() ?? "";
+
+        if (DateTime.TryParse(filterFromInput, out var dt))
+        {
+            filterFrom = dt;
+            await RebuildAndDraw();
+        }
+    }
+
+    private async Task OnFilterToChanged(ChangeEventArgs e)
+    {
+        filterToInput = e.Value?.ToString() ?? "";
+
+        if (DateTime.TryParse(filterToInput, out var dt))
+        {
+            filterTo = dt;
+            await RebuildAndDraw();
+        }
+    }
+
+    private async Task OnWindowMinutesChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var value))
+        {
+            windowMinutes = value;
+            await RebuildAndDraw();
+        }
+    }
+
+    private async Task LoadTableAndDraw()
+    {
+        if (store == null) return;
+
+        var archIds = store.GetArchIds(selectedRecId).ToList();
+        if (archIds.Count == 0)
+        {
+            status = "Pro vybraný objekt nebyly nalezeny archivy.";
+            windows.Clear();
+            await JS.InvokeVoidAsync("boxplotInterop.clear", "thdBoxplotChart");
+            return;
+        }
+
+        var archId = archIds.First();
+        var pack = store.GetBinPacks(selectedRecId, archId).FirstOrDefault();
+        if (pack == null)
+        {
+            status = "Nebyly nalezeny datové balíčky.";
+            windows.Clear();
+            await JS.InvokeVoidAsync("boxplotInterop.clear", "thdBoxplotChart");
+            return;
+        }
+
+        var typeXml = store.ReadArchDefXml(selectedRecId, archId);
+        var columns = ArchDefParser.ParseColumns(typeXml);
+
+        table = UniArchTableParser.ParseMinuteTable(
+            store.Read(pack.Entry),
+            pack.TimeUtc.ToLocalTime(),
+            periodMs: 60000,
+            maxRows: Math.Clamp(maxRowsToLoad, 300, 200000));
+
+        table.Columns.Clear();
+        table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
+
+        if (table.Time.Count > 0)
+        {
+            filterFrom ??= table.Time.First();
+            filterTo ??= table.Time.Last();
+
+            filterFromInput = filterFrom.Value.ToString("yyyy-MM-ddTHH:mm");
+            filterToInput = filterTo.Value.ToString("yyyy-MM-ddTHH:mm");
+        }
+
+        await RebuildAndDraw();
+    }
+
+    private async Task RebuildAndDraw()
+    {
+        windows.Clear();
+
+        if (table == null) return;
+
+        var metricSeries = BuildMetricSeries(selectedMetric, out var sourceLabel);
+        var filteredSeries = metricSeries
+            .Where(x => (!filterFrom.HasValue || x.Time >= filterFrom.Value) && (!filterTo.HasValue || x.Time <= filterTo.Value))
+            .ToList();
+
+        if (filteredSeries.Count == 0)
+        {
+            await JS.InvokeVoidAsync("boxplotInterop.clear", "thdBoxplotChart");
+            return;
+        }
+
+        windows.AddRange(BuildWindowStats(filteredSeries, windowMinutes));
+
+        var filtered = onlyAboveThreshold ? windows.Where(w => w.P95 > threshold).ToList() : windows.ToList();
+        var chartLabel = metrics.FirstOrDefault(m => m.Key == selectedMetric)?.ChartLabel ?? selectedMetric;
+
+        await JS.InvokeVoidAsync("boxplotInterop.renderReadable","thdBoxplotChart",filtered.Select(w => w.WindowStart.ToString("MM-dd HH:mm")).ToArray(),
+            filtered.Select(w => new[] { w.LowerWhisker, w.Q1, w.Median, w.Q3, w.UpperWhisker }).ToArray(),filtered.SelectMany((w, idx) => w.Outliers.Select(v => new object[] { idx, v })).ToArray(),chartLabel,threshold,thresholdUnit,onlyAboveThreshold);
+
+        var exceedCount = windows.Count(w => w.P95 > threshold);
+    }
+
+    private int? ResolveColumnIndex(string metricName)
+    {
+        if (table == null) return null;
+
+        for (int i = 0; i < table.Columns.Count; i++)
+        {
+            if (string.Equals(table.Columns[i].Name, metricName, StringComparison.OrdinalIgnoreCase))
+            {
+                return i;
+            }
+        }
+
+        var normalizedMetric = NormalizeName(metricName);
+
+        for (int i = 0; i < table.Columns.Count; i++)
+        {
+            var normalizedColumn = NormalizeName(table.Columns[i].Name);
+            if (normalizedColumn == normalizedMetric || normalizedColumn.EndsWith(normalizedMetric, StringComparison.Ordinal))
+            {
+                return i;
+            }
+        }
+
+        return null;
+    }
+
+    private int? FindClosestColumnIndex(string metricName)
+    {
+        if (table == null) return null;
+
+        var tokens = NormalizeName(metricName).Split('_', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        for (int i = 0; i < table.Columns.Count; i++)
+        {
+            var normalizedColumn = NormalizeName(table.Columns[i].Name);
+            if (tokens.All(t => normalizedColumn.Contains(t, StringComparison.Ordinal)))
+            {
+                return i;
+            }
+        }
+
+        return null;
+    }
+
+    private List<(DateTime Time, double Value)> BuildMetricSeries(string metricKey, out string sourceLabel)
+    {
+        sourceLabel = metricKey;
+
+        if (table == null) return [];
+
+        if (metricKey == "THDU_3ph_avg")
+        {
+            var thdu1 = ResolveColumnIndex("Harmonics/THDU_avg_THDU1") ?? FindClosestColumnIndex("THDU1");
+            var thdu2 = ResolveColumnIndex("Harmonics/THDU_avg_THDU2") ?? FindClosestColumnIndex("THDU2");
+            var thdu3 = ResolveColumnIndex("Harmonics/THDU_avg_THDU3") ?? FindClosestColumnIndex("THDU3");
+
+            if (!thdu1.HasValue || !thdu2.HasValue || !thdu3.HasValue)
+            {
+                sourceLabel = "THDU sloupce nebyly nalezeny";
+                return [];
+            }
+
+            sourceLabel = "Průměr THDU1/THDU2/THDU3";
+
+            return table.Time
+                .Zip(table.Rows, (t, row) =>
+                {
+                    var v1 = thdu1.Value < row.Length ? row[thdu1.Value] : double.NaN;
+                    var v2 = thdu2.Value < row.Length ? row[thdu2.Value] : double.NaN;
+                    var v3 = thdu3.Value < row.Length ? row[thdu3.Value] : double.NaN;
+                    return new { Time = t, Value = (v1 + v2 + v3) / 3d };
+                })
+                .Where(x => !double.IsNaN(x.Value) && !double.IsInfinity(x.Value))
+                .Select(x => (x.Time, x.Value))
+                .ToList();
+        }
+
+        if (metricKey == "THDI_3ph_avg")
+        {
+            var thdi1 = ResolveColumnIndex("Harmonics/THDI_avg_THDI1") ?? FindClosestColumnIndex("THDI1");
+            var thdi2 = ResolveColumnIndex("Harmonics/THDI_avg_THDI2") ?? FindClosestColumnIndex("THDI2");
+            var thdi3 = ResolveColumnIndex("Harmonics/THDI_avg_THDI3") ?? FindClosestColumnIndex("THDI3");
+
+            if (!thdi1.HasValue || !thdi2.HasValue || !thdi3.HasValue)
+            {
+                sourceLabel = "THDI sloupce nebyly nalezeny";
+                return [];
+            }
+
+            sourceLabel = "Průměr THDI1/THDI2/THDI3";
+
+            return table.Time
+                .Zip(table.Rows, (t, row) =>
+                {
+                    var v1 = thdi1.Value < row.Length ? row[thdi1.Value] : double.NaN;
+                    var v2 = thdi2.Value < row.Length ? row[thdi2.Value] : double.NaN;
+                    var v3 = thdi3.Value < row.Length ? row[thdi3.Value] : double.NaN;
+                    return new { Time = t, Value = (v1 + v2 + v3) / 3d };
+                })
+                .Where(x => !double.IsNaN(x.Value) && !double.IsInfinity(x.Value))
+                .Select(x => (x.Time, x.Value))
+                .ToList();
+        }
+
+        var columnIndex = ResolveColumnIndex(metricKey);
+        if (!columnIndex.HasValue)
+        {
+            var fallback = FindClosestColumnIndex(metricKey);
+            if (!fallback.HasValue)
+            {
+                sourceLabel = $"Sloupec '{metricKey}' nebyl nalezen";
+                return [];
+            }
+
+            columnIndex = fallback;
+        }
+
+        sourceLabel = table.Columns[columnIndex.Value].Name;
+
+        return table.Time.Zip(table.Rows, (t, row) => new { Time = t, Value = columnIndex.Value < row.Length ? row[columnIndex.Value] : double.NaN })
+            .Where(x => !double.IsNaN(x.Value) && !double.IsInfinity(x.Value)).Select(x => (x.Time, x.Value)).ToList();
+    }
+
+    private IEnumerable<WindowStats> BuildWindowStats(List<(DateTime Time, double Value)> pairs, int windowSizeMinutes)
+    {
+        if (pairs.Count == 0) yield break;
+
+        var orderedPairs = pairs.OrderBy(x => x.Time).ToList();
+        var currentStart = AlignToWindow(orderedPairs[0].Time, windowSizeMinutes);
+        var bucket = new List<double>();
+
+        foreach (var pair in orderedPairs)
+        {
+            var windowStart = AlignToWindow(pair.Time, windowSizeMinutes);
+
+            if (windowStart != currentStart)
+            {
+                if (bucket.Count > 0)
+                {
+                    yield return ComputeWindow(currentStart, bucket);
+                }
+
+                bucket = [];
+                currentStart = windowStart;
+            }
+
+            bucket.Add(pair.Value);
+        }
+
+        if (bucket.Count > 0)
+        {
+            yield return ComputeWindow(currentStart, bucket);
+        }
+    }
+
+    private static WindowStats ComputeWindow(DateTime windowStart, List<double> values)
+    {
+        values.Sort();
+
+        var q1 = Percentile(values, 0.25);
+        var median = Percentile(values, 0.50);
+        var q3 = Percentile(values, 0.75);
+        var p95 = Percentile(values, 0.95);
+
+        var iqr = q3 - q1;
+        var lowerFence = q1 - 1.5 * iqr;
+        var upperFence = q3 + 1.5 * iqr;
+
+        var inRange = values.Where(v => v >= lowerFence && v <= upperFence).ToList();
+        var lowerWhisker = inRange.Count > 0 ? inRange.Min() : values.First();
+        var upperWhisker = inRange.Count > 0 ? inRange.Max() : values.Last();
+        var outliers = values.Where(v => v < lowerWhisker || v > upperWhisker).ToList();
+
+        return new WindowStats(windowStart, values.First(), q1, median, q3, values.Last(), p95, lowerWhisker, upperWhisker, outliers);
+    }
+
+    private static double Percentile(List<double> sorted, double p)
+    {
+        if (sorted.Count == 0) return double.NaN;
+        if (sorted.Count == 1) return sorted[0];
+
+        var position = (sorted.Count - 1) * p;
+        var left = (int)Math.Floor(position);
+        var right = (int)Math.Ceiling(position);
+
+        if (left == right) return sorted[left];
+
+        var fraction = position - left;
+        return sorted[left] + (sorted[right] - sorted[left]) * fraction;
+    }
+
+    private static DateTime AlignToWindow(DateTime time, int windowSizeMinutes)
+    {
+        var alignedMinute = (time.Minute / windowSizeMinutes) * windowSizeMinutes;
+        return new DateTime(time.Year, time.Month, time.Day, time.Hour, alignedMinute, 0, time.Kind);
+    }
+
+    private static string NormalizeName(string value)
+    {
+        return string.Concat(value.Where(ch => char.IsLetterOrDigit(ch) || ch == '_')).ToUpperInvariant();
+    }
+}
