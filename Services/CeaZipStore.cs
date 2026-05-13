@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Globalization;
@@ -18,35 +18,6 @@ namespace DeviceMeasurementsApp.Services
         private readonly byte[] _zip;
 
         private CeaZipStore(byte[] zip) => _zip = zip;
-
-        private static byte[]? _currentZip;
-        private static string _currentFileName = string.Empty;
-
-        public static string CurrentFileName => _currentFileName;
-        public static bool HasCurrent => _currentZip is { Length: > 0 };
-
-        public static void SetCurrent(byte[] bytes, string fileName)
-        {
-            _currentZip = bytes ?? throw new ArgumentNullException(nameof(bytes));
-            _currentFileName = string.IsNullOrWhiteSpace(fileName) ? "uploaded.cea" : fileName;
-        }
-
-        public static CeaZipStore? TryGetCurrent()
-        {
-            if (!HasCurrent)
-            {
-                return null;
-            }
-
-            return new CeaZipStore(_currentZip!);
-        }
-
-        public static void ClearCurrent()
-        {
-            _currentZip = null;
-            _currentFileName = string.Empty;
-        }
-
 
         public static CeaZipStore FromBytes(byte[] bytes) => new(bytes);
 
