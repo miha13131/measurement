@@ -125,10 +125,10 @@
 
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
         <label>Čas:</label>
-        <select @bind="selectedDetailTime">
+        <select @bind="selectedDetailTimeKey">
             @foreach (var time in detailTimeline)
             {
-                <option value="@time">@time.ToString("yyyy-MM-dd HH:mm")</option>
+                <option value="@time.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)">@time.ToString("yyyy-MM-dd HH:mm")</option>
             }
         </select>
         <button @onclick="RefreshDetails">Zobrazit detail</button>
@@ -227,7 +227,7 @@
     private DetailSnapshot? detailSnapshot;
     private DateTime? filterFrom;
     private DateTime? filterTo;
-    private DateTime? selectedDetailTime;
+    private string? selectedDetailTimeKey;
     private List<DateTime> detailTimeline = [];
     private int zoomStartPercent = 0;
     private int zoomEndPercent = 100;
@@ -559,13 +559,15 @@
 
         if (detailTimeline.Count == 0)
         {
-            selectedDetailTime = null;
+            selectedDetailTimeKey = null;
             return;
         }
 
-        if (!selectedDetailTime.HasValue || !detailTimeline.Contains(selectedDetailTime.Value))
+        if (string.IsNullOrWhiteSpace(selectedDetailTimeKey)
+            || !DateTime.TryParseExact(selectedDetailTimeKey, "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)
+            || !detailTimeline.Contains(parsed))
         {
-            selectedDetailTime = detailTimeline.Last();
+            selectedDetailTimeKey = detailTimeline.Last().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
         }
     }
 
@@ -587,9 +589,10 @@
             return;
         }
 
-        var nearest = selectedDetailTime.HasValue && timeline.Contains(selectedDetailTime.Value)
-            ? selectedDetailTime.Value
+        var selectedTime = DateTime.TryParseExact(selectedDetailTimeKey, "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedSelected)
+            ? parsedSelected
             : timeline.Last();
+        var nearest = timeline.Contains(selectedTime) ? selectedTime : timeline.Last();
 
         var meterValues = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, points) in rawSeries)
