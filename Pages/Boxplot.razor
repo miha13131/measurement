@@ -1,4 +1,4 @@
-﻿@page "/boxplot"
+@page "/boxplot"
 @inject HttpClient Http
 @inject IJSRuntime JS
 
@@ -8,7 +8,7 @@
 <h3>Krabicový graf</h3>
 
 <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px;">
-    <button @onclick="LoadAndDraw">Načíst data + vykreslit</button>
+    <button @onclick="LoadAndDraw">Načíst + vykreslit</button>
 
     <label>Max. řádků:</label>
     <input type="number" min="300" max="200000" step="300" @bind="maxRowsToLoad" style="width:110px;" />
@@ -53,7 +53,6 @@
     </label>
 </div>
 
-<p style="margin-bottom:4px; color:#4b5563;">Zdroj dat: @dataSourceLabel</p>
 <p>@status</p>
 
 @if (windows.Count > 0)
@@ -111,24 +110,9 @@
     private string thresholdText => threshold.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
     private string thresholdUnit => metrics.FirstOrDefault(m => m.Key == selectedMetric)?.Unit ?? string.Empty;
 
-    private string dataSourceLabel = "není vybraný";
-
     private async Task LoadAndDraw()
     {
-        var currentStore = CeaZipStore.TryGetCurrent();
-        if (currentStore is null)
-        {
-            store = null;
-            isLoaded = false;
-            dataSourceLabel = "není vybraný";
-            status = "Nejdříve nahrajte .cea soubor na stránce Measurements Table.";
-            windows.Clear();
-            await JS.InvokeVoidAsync("boxplotInterop.clear", "thdBoxplotChart");
-            return;
-        }
-
-        store = currentStore;
-        dataSourceLabel = $"nahraný soubor: {CeaZipStore.CurrentFileName}";
+        store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
         isLoaded = true;
         await LoadTableAndDraw();
     }
@@ -225,8 +209,7 @@
             store.Read(pack.Entry),
             pack.TimeUtc.ToLocalTime(),
             periodMs: 60000,
-            maxRows: Math.Clamp(maxRowsToLoad, 300, 200000),
-            expectedColumns: columns.Count);
+            maxRows: Math.Clamp(maxRowsToLoad, 300, 200000));
 
         table.Columns.Clear();
         table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
@@ -269,7 +252,6 @@
             filtered.Select(w => new[] { w.LowerWhisker, w.Q1, w.Median, w.Q3, w.UpperWhisker }).ToArray(),filtered.SelectMany((w, idx) => w.Outliers.Select(v => new object[] { idx, v })).ToArray(),chartLabel,threshold,thresholdUnit,onlyAboveThreshold);
 
         var exceedCount = windows.Count(w => w.P95 > threshold);
-        status = $"Načteno oken: {windows.Count}, nad prahem: {exceedCount}.";
     }
 
     private int? ResolveColumnIndex(string metricName)
