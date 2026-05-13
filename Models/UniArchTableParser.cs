@@ -7,11 +7,11 @@ namespace DeviceMeasurementsApp.Models
 {
     public static class UniArchTableParser
     {
-        public static UniArchTable ParseMinuteTable(byte[] archBytes, DateTime startLocal, int periodMs = 60000, int maxRows = 300)
+        public static UniArchTable ParseMinuteTable(byte[] archBytes, DateTime startLocal, int periodMs = 60000, int maxRows = 300, int? expectedValueColumns = null)
         {
             const int serviceFloatsPerRow = 2;
 
-            int rawFloatsPerRow = InferRawFloatsPerRow(archBytes);
+            int rawFloatsPerRow = InferRawFloatsPerRow(archBytes, expectedValueColumns);
             int floatsPerRow = rawFloatsPerRow - serviceFloatsPerRow;
             int rowBytes = rawFloatsPerRow * 4;
 
@@ -46,12 +46,19 @@ namespace DeviceMeasurementsApp.Models
             return table;
         }
 
-        private static int InferRawFloatsPerRow(byte[] archBytes)
+        private static int InferRawFloatsPerRow(byte[] archBytes, int? expectedValueColumns)
         {
             const uint marker = 0x000000AD;
 
             if (archBytes.Length < 16)
                 throw new ArgumentException("arch file too small");
+
+            if (expectedValueColumns is > 0)
+            {
+                int expectedRaw = expectedValueColumns.Value + 2;
+                if (expectedRaw > 2 && (archBytes.Length / 4) % expectedRaw == 0)
+                    return expectedRaw;
+            }
 
             var markerFloatIndexes = new List<int>();
             int maxFloatsToScan = Math.Min(30000, archBytes.Length / 4);
