@@ -125,7 +125,12 @@
 
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
         <label>Čas:</label>
-        <input type="datetime-local" @bind-value="detailTime" @bind-value:format="yyyy-MM-ddTHH:mm" @bind-value:culture="CultureInfo.InvariantCulture" />
+        <select @bind="selectedDetailTime">
+            @foreach (var time in detailTimeline)
+            {
+                <option value="@time">@time.ToString("yyyy-MM-dd HH:mm")</option>
+            }
+        </select>
         <button @onclick="RefreshDetails">Zobrazit detail</button>
     </div>
 
@@ -222,7 +227,8 @@
     private DetailSnapshot? detailSnapshot;
     private DateTime? filterFrom;
     private DateTime? filterTo;
-    private DateTime? detailTime;
+    private DateTime? selectedDetailTime;
+    private List<DateTime> detailTimeline = [];
     private int zoomStartPercent = 0;
     private int zoomEndPercent = 100;
 
@@ -549,15 +555,18 @@
 
     private void InitializeDetailTime(Dictionary<string, List<(DateTime X, double Y)>> rawSeries)
     {
-        var timeline = rawSeries.Values.SelectMany(x => x.Select(p => p.X)).Distinct().OrderBy(t => t).ToList();
+        detailTimeline = rawSeries.Values.SelectMany(x => x.Select(p => p.X)).Distinct().OrderBy(t => t).ToList();
 
-        if (timeline.Count == 0)
+        if (detailTimeline.Count == 0)
         {
-            detailTime = null;
+            selectedDetailTime = null;
             return;
         }
 
-        detailTime ??= timeline.Last();
+        if (!selectedDetailTime.HasValue || !detailTimeline.Contains(selectedDetailTime.Value))
+        {
+            selectedDetailTime = detailTimeline.Last();
+        }
     }
 
     private Task RefreshDetails()
@@ -578,8 +587,9 @@
             return;
         }
 
-        var target = detailTime ?? timeline.Last();
-        var nearest = timeline.OrderBy(t => Math.Abs((t - target).Ticks)).First();
+        var nearest = selectedDetailTime.HasValue && timeline.Contains(selectedDetailTime.Value)
+            ? selectedDetailTime.Value
+            : timeline.Last();
 
         var meterValues = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, points) in rawSeries)
