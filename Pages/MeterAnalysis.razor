@@ -125,10 +125,10 @@
 
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
         <label>Čas:</label>
-        <select @bind="selectedDetailTimeKey">
-            @foreach (var time in detailTimeline)
+        <select @bind="selectedDetailIndex">
+            @for (var i = 0; i < detailTimeline.Count; i++)
             {
-                <option value="@time.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)">@time.ToString("yyyy-MM-dd HH:mm")</option>
+                <option value="@i">@detailTimeline[i].ToString("yyyy-MM-dd HH:mm")</option>
             }
         </select>
         <button @onclick="RefreshDetails">Zobrazit detail</button>
@@ -227,7 +227,7 @@
     private DetailSnapshot? detailSnapshot;
     private DateTime? filterFrom;
     private DateTime? filterTo;
-    private string? selectedDetailTimeKey;
+    private int selectedDetailIndex = -1;
     private List<DateTime> detailTimeline = [];
     private int zoomStartPercent = 0;
     private int zoomEndPercent = 100;
@@ -559,15 +559,13 @@
 
         if (detailTimeline.Count == 0)
         {
-            selectedDetailTimeKey = null;
+            selectedDetailIndex = -1;
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(selectedDetailTimeKey)
-            || !DateTime.TryParseExact(selectedDetailTimeKey, "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)
-            || !detailTimeline.Contains(parsed))
+        if (selectedDetailIndex < 0 || selectedDetailIndex >= detailTimeline.Count)
         {
-            selectedDetailTimeKey = detailTimeline.Last().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+            selectedDetailIndex = detailTimeline.Count - 1;
         }
     }
 
@@ -589,10 +587,9 @@
             return;
         }
 
-        var selectedTime = DateTime.TryParseExact(selectedDetailTimeKey, "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedSelected)
-            ? parsedSelected
+        var nearest = selectedDetailIndex >= 0 && selectedDetailIndex < detailTimeline.Count
+            ? detailTimeline[selectedDetailIndex]
             : timeline.Last();
-        var nearest = timeline.Contains(selectedTime) ? selectedTime : timeline.Last();
 
         var meterValues = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, points) in rawSeries)
