@@ -3,7 +3,6 @@
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
 @inject HttpClient Http
-@inject UploadedCeaState UploadedState
 
 <h3>Tabulka měření</h3>
 
@@ -123,7 +122,7 @@
 
             var bytes = ms.ToArray();
             store = CeaZipStore.FromBytes(bytes);
-            UploadedState.Save(bytes, file.Name);
+            CeaZipStore.SetCurrent(bytes, file.Name);
             table = null;
 
             status = $"Soubor načten: {file.Name}.";
@@ -142,7 +141,7 @@
         {
             var bytes = await Http.GetByteArrayAsync("sample-data/SMY134aEMIx.cea");
             store = CeaZipStore.FromBytes(bytes);
-            UploadedState.Save(bytes, "SMY134aEMIx.cea");
+            CeaZipStore.SetCurrent(bytes, "SMY134aEMIx.cea");
             table = null;
             selectedFileName = "Ukázkový soubor";
             status = "Ukázkový soubor byl načten.";
@@ -272,6 +271,6 @@
         selectedArchiveId = 0;
         selectedPackEntry = string.Empty;
         selectedFileName = string.Empty;
-        UploadedState.Clear();
+        CeaZipStore.ClearCurrent();
     }
 }

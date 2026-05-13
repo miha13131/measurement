@@ -1,7 +1,6 @@
 ﻿@page "/boxplot"
 @inject HttpClient Http
 @inject IJSRuntime JS
-@inject UploadedCeaState UploadedState
 
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
@@ -112,23 +111,24 @@
     private string thresholdText => threshold.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
     private string thresholdUnit => metrics.FirstOrDefault(m => m.Key == selectedMetric)?.Unit ?? string.Empty;
 
-    private string dataSourceLabel = "ukázkový soubor";
+    private string dataSourceLabel = "není vybraný";
 
     private async Task LoadAndDraw()
     {
-        var uploadedStore = UploadedState.TryCreateStore();
-        if (uploadedStore is not null)
+        var currentStore = CeaZipStore.TryGetCurrent();
+        if (currentStore is null)
         {
-            store = uploadedStore;
-            dataSourceLabel = $"nahraný soubor: {UploadedState.FileName}";
-        }
-        else
-        {
-            var bytes = await Http.GetByteArrayAsync("sample-data/SMY134aEMIx.cea");
-            store = CeaZipStore.FromBytes(bytes);
-            dataSourceLabel = "ukázkový soubor: SMY134aEMIx.cea";
+            store = null;
+            isLoaded = false;
+            dataSourceLabel = "není vybraný";
+            status = "Nejdříve nahrajte .cea soubor na stránce Measurements Table.";
+            windows.Clear();
+            await JS.InvokeVoidAsync("boxplotInterop.clear", "thdBoxplotChart");
+            return;
         }
 
+        store = currentStore;
+        dataSourceLabel = $"nahraný soubor: {CeaZipStore.CurrentFileName}";
         isLoaded = true;
         await LoadTableAndDraw();
     }
