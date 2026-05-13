@@ -246,8 +246,7 @@
             bytes,
             pack.TimeUtc.ToLocalTime(),
             periodMs: 60000,
-            maxRows: Math.Clamp(maxRows, 10, 10000),
-            expectedValueColumns: columns.Count);
+            maxRows: Math.Clamp(maxRows, 10, 10000));
 
         table.Columns.Clear();
         table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
