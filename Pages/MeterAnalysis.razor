@@ -4,6 +4,7 @@
 
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
+@using System.Globalization
 
 <h3>Trend měřičů</h3>
 
@@ -42,10 +43,10 @@
 
         <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px;">
             <label>Od:</label>
-            <input type="datetime-local" @bind-value="filterFrom" @bind-value:format="yyyy-MM-ddTHH:mm" />
+            <input type="datetime-local" @bind-value="filterFrom" @bind-value:format="yyyy-MM-ddTHH:mm" @bind-value:culture="CultureInfo.InvariantCulture" />
 
             <label>Do:</label>
-            <input type="datetime-local" @bind-value="filterTo" @bind-value:format="yyyy-MM-ddTHH:mm" />
+            <input type="datetime-local" @bind-value="filterTo" @bind-value:format="yyyy-MM-ddTHH:mm" @bind-value:culture="CultureInfo.InvariantCulture" />
 
             <button @onclick="ApplyDateFilter">Použít filtr</button>
             <button @onclick="ResetDateFilter">Reset</button>
@@ -124,7 +125,7 @@
 
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
         <label>Čas:</label>
-        <input type="datetime-local" @bind-value="detailTime" @bind-value:format="yyyy-MM-ddTHH:mm" />
+        <input type="datetime-local" @bind-value="detailTime" @bind-value:format="yyyy-MM-ddTHH:mm" @bind-value:culture="CultureInfo.InvariantCulture" />
         <button @onclick="RefreshDetails">Zobrazit detail</button>
     </div>
 
