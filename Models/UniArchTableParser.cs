@@ -7,11 +7,10 @@ namespace DeviceMeasurementsApp.Models
 {
     public static class UniArchTableParser
     {
-        public static UniArchTable ParseMinuteTable(byte[] archBytes, DateTime startLocal, int periodMs = 60000, int maxRows = 300)
+        public static UniArchTable ParseMinuteTable(byte[] archBytes, DateTime startLocal, int periodMs = 60000, int maxRows = 300, int? expectedColumns = null)
         {
-            const int serviceFloatsPerRow = 2;
-
-            int rawFloatsPerRow = InferRawFloatsPerRow(archBytes);
+            int serviceFloatsPerRow = ResolveServiceFloatsPerRow(archBytes, expectedColumns);
+            int rawFloatsPerRow = ResolveRawFloatsPerRow(archBytes, serviceFloatsPerRow, expectedColumns);
             int floatsPerRow = rawFloatsPerRow - serviceFloatsPerRow;
             int rowBytes = rawFloatsPerRow * 4;
 
@@ -44,6 +43,65 @@ namespace DeviceMeasurementsApp.Models
             }
 
             return table;
+        }
+
+
+
+        private static int ResolveServiceFloatsPerRow(byte[] archBytes, int? expectedColumns)
+        {
+            if (!expectedColumns.HasValue || expectedColumns.Value <= 0)
+            {
+                return 2;
+            }
+
+            const uint marker = 0x000000AD;
+            int totalFloats = archBytes.Length / 4;
+            int bestService = 2;
+            int bestScore = -1;
+
+            for (int service = 0; service <= 8; service++)
+            {
+                int raw = expectedColumns.Value + service;
+                if (raw <= 0 || totalFloats % raw != 0)
+                {
+                    continue;
+                }
+
+                int rowBytes = raw * 4;
+                int rows = totalFloats / raw;
+                int sampleRows = Math.Min(rows, 300);
+                int markerHits = 0;
+
+                for (int r = 0; r < sampleRows; r++)
+                {
+                    uint start = BinaryPrimitives.ReadUInt32BigEndian(archBytes.AsSpan(r * rowBytes, 4));
+                    if (start == marker) markerHits++;
+                }
+
+                if (markerHits > bestScore)
+                {
+                    bestScore = markerHits;
+                    bestService = service;
+                }
+            }
+
+            return bestService;
+        }
+
+        private static int ResolveRawFloatsPerRow(byte[] archBytes, int serviceFloatsPerRow, int? expectedColumns)
+        {
+            int totalFloats = archBytes.Length / 4;
+
+            if (expectedColumns.HasValue && expectedColumns.Value > 0)
+            {
+                int candidate = expectedColumns.Value + serviceFloatsPerRow;
+                if (candidate > serviceFloatsPerRow && totalFloats % candidate == 0)
+                {
+                    return candidate;
+                }
+            }
+
+            return InferRawFloatsPerRow(archBytes);
         }
 
         private static int InferRawFloatsPerRow(byte[] archBytes)
