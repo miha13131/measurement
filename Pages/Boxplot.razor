@@ -225,7 +225,8 @@
             store.Read(pack.Entry),
             pack.TimeUtc.ToLocalTime(),
             periodMs: 60000,
-            maxRows: Math.Clamp(maxRowsToLoad, 300, 200000));
+            maxRows: Math.Clamp(maxRowsToLoad, 300, 200000),
+            expectedColumns: columns.Count);
 
         table.Columns.Clear();
         table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
