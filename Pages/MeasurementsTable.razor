@@ -81,7 +81,7 @@
                         <td>@table.Time[i].ToString("HH:mm")</td>
                         @for (var c = 0; c < Math.Min(table.Columns.Count, table.Rows[i].Length); c++)
                         {
-                            <td>@table.Rows[i][c].ToString("0.###")</td>
+                            <td>@FormatValue(table.Rows[i][c])</td>
                         }
                     </tr>
                 }
@@ -257,6 +257,16 @@
         table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
 
         return Task.CompletedTask;
+    }
+
+    private static string FormatValue(float value)
+    {
+        if (float.IsNaN(value) || float.IsInfinity(value))
+        {
+            return "-";
+        }
+
+        return value.ToString("0.###");
     }
 
     private void ResetAll()
