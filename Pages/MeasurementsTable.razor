@@ -120,7 +120,9 @@
             using var ms = new MemoryStream();
             await stream.CopyToAsync(ms);
 
-            store = CeaZipStore.FromBytes(ms.ToArray());
+            var bytes = ms.ToArray();
+            store = CeaZipStore.FromBytes(bytes);
+            CeaZipStore.SetCurrent(bytes, file.Name);
             table = null;
 
             status = $"Soubor načten: {file.Name}.";
@@ -137,7 +139,9 @@
     {
         try
         {
-            store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+            var bytes = await Http.GetByteArrayAsync("sample-data/SMY134aEMIx.cea");
+            store = CeaZipStore.FromBytes(bytes);
+            CeaZipStore.SetCurrent(bytes, "SMY134aEMIx.cea");
             table = null;
             selectedFileName = "Ukázkový soubor";
             status = "Ukázkový soubor byl načten.";
@@ -246,7 +250,8 @@
             bytes,
             pack.TimeUtc.ToLocalTime(),
             periodMs: 60000,
-            maxRows: Math.Clamp(maxRows, 10, 10000));
+            maxRows: Math.Clamp(maxRows, 10, 10000),
+            expectedColumns: columns.Count);
 
         table.Columns.Clear();
         table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
@@ -267,5 +272,6 @@
         selectedArchiveId = 0;
         selectedPackEntry = string.Empty;
         selectedFileName = string.Empty;
+        CeaZipStore.ClearCurrent();
     }
 }

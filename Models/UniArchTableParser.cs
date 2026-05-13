@@ -7,11 +7,11 @@ namespace DeviceMeasurementsApp.Models
 {
     public static class UniArchTableParser
     {
-        public static UniArchTable ParseMinuteTable(byte[] archBytes, DateTime startLocal, int periodMs = 60000, int maxRows = 300)
+        public static UniArchTable ParseMinuteTable(byte[] archBytes, DateTime startLocal, int periodMs = 60000, int maxRows = 300, int? expectedColumns = null)
         {
             const int serviceFloatsPerRow = 2;
 
-            int rawFloatsPerRow = InferRawFloatsPerRow(archBytes);
+            int rawFloatsPerRow = ResolveRawFloatsPerRow(archBytes, serviceFloatsPerRow, expectedColumns);
             int floatsPerRow = rawFloatsPerRow - serviceFloatsPerRow;
             int rowBytes = rawFloatsPerRow * 4;
 
@@ -44,6 +44,23 @@ namespace DeviceMeasurementsApp.Models
             }
 
             return table;
+        }
+
+
+        private static int ResolveRawFloatsPerRow(byte[] archBytes, int serviceFloatsPerRow, int? expectedColumns)
+        {
+            int totalFloats = archBytes.Length / 4;
+
+            if (expectedColumns.HasValue && expectedColumns.Value > 0)
+            {
+                int candidate = expectedColumns.Value + serviceFloatsPerRow;
+                if (candidate > serviceFloatsPerRow && totalFloats % candidate == 0)
+                {
+                    return candidate;
+                }
+            }
+
+            return InferRawFloatsPerRow(archBytes);
         }
 
         private static int InferRawFloatsPerRow(byte[] archBytes)
