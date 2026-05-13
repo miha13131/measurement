@@ -1,4 +1,4 @@
-﻿@page "/measurements-table"
+@page "/measurements-table"
 @using Microsoft.AspNetCore.Components.Forms
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
@@ -81,7 +81,7 @@
                         <td>@table.Time[i].ToString("HH:mm")</td>
                         @for (var c = 0; c < Math.Min(table.Columns.Count, table.Rows[i].Length); c++)
                         {
-                            <td>@FormatValue(table.Rows[i][c])</td>
+                            <td>@table.Rows[i][c].ToString("0.###")</td>
                         }
                     </tr>
                 }
@@ -120,9 +120,7 @@
             using var ms = new MemoryStream();
             await stream.CopyToAsync(ms);
 
-            var bytes = ms.ToArray();
-            store = CeaZipStore.FromBytes(bytes);
-            CeaZipStore.SetCurrent(bytes, file.Name);
+            store = CeaZipStore.FromBytes(ms.ToArray());
             table = null;
 
             status = $"Soubor načten: {file.Name}.";
@@ -139,9 +137,7 @@
     {
         try
         {
-            var bytes = await Http.GetByteArrayAsync("sample-data/SMY134aEMIx.cea");
-            store = CeaZipStore.FromBytes(bytes);
-            CeaZipStore.SetCurrent(bytes, "SMY134aEMIx.cea");
+            store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
             table = null;
             selectedFileName = "Ukázkový soubor";
             status = "Ukázkový soubor byl načten.";
@@ -250,23 +246,12 @@
             bytes,
             pack.TimeUtc.ToLocalTime(),
             periodMs: 60000,
-            maxRows: Math.Clamp(maxRows, 10, 10000),
-            expectedColumns: columns.Count);
+            maxRows: Math.Clamp(maxRows, 10, 10000));
 
         table.Columns.Clear();
         table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
 
         return Task.CompletedTask;
-    }
-
-    private static string FormatValue(float value)
-    {
-        if (float.IsNaN(value) || float.IsInfinity(value))
-        {
-            return "-";
-        }
-
-        return value.ToString("0.###");
     }
 
     private void ResetAll()
@@ -282,6 +267,5 @@
         selectedArchiveId = 0;
         selectedPackEntry = string.Empty;
         selectedFileName = string.Empty;
-        CeaZipStore.ClearCurrent();
     }
 }
