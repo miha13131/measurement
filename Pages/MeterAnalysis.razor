@@ -4,6 +4,7 @@
 
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
+@using System.Globalization
 
 <h3>Trend měřičů</h3>
 
@@ -42,10 +43,10 @@
 
         <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px;">
             <label>Od:</label>
-            <input type="datetime-local" @bind-value="filterFrom" @bind-value:format="yyyy-MM-ddTHH:mm" />
+            <input type="datetime-local" @bind-value="filterFrom" @bind-value:format="yyyy-MM-ddTHH:mm" @bind-value:culture="CultureInfo.InvariantCulture" />
 
             <label>Do:</label>
-            <input type="datetime-local" @bind-value="filterTo" @bind-value:format="yyyy-MM-ddTHH:mm" />
+            <input type="datetime-local" @bind-value="filterTo" @bind-value:format="yyyy-MM-ddTHH:mm" @bind-value:culture="CultureInfo.InvariantCulture" />
 
             <button @onclick="ApplyDateFilter">Použít filtr</button>
             <button @onclick="ResetDateFilter">Reset</button>
@@ -124,7 +125,13 @@
 
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
         <label>Čas:</label>
-        <input type="datetime-local" @bind-value="detailTime" @bind-value:format="yyyy-MM-ddTHH:mm" />
+        <input list="detail-time-options" @bind="detailTimeQuery" @bind:event="oninput" placeholder="yyyy-MM-dd HH:mm" />
+        <datalist id="detail-time-options">
+            @foreach (var time in detailTimeline)
+            {
+                <option value="@time.ToString("yyyy-MM-dd HH:mm")"></option>
+            }
+        </datalist>
         <button @onclick="RefreshDetails">Zobrazit detail</button>
     </div>
 
@@ -221,7 +228,8 @@
     private DetailSnapshot? detailSnapshot;
     private DateTime? filterFrom;
     private DateTime? filterTo;
-    private DateTime? detailTime;
+    private string detailTimeQuery = string.Empty;
+    private List<DateTime> detailTimeline = [];
     private int zoomStartPercent = 0;
     private int zoomEndPercent = 100;
 
@@ -548,15 +556,18 @@
 
     private void InitializeDetailTime(Dictionary<string, List<(DateTime X, double Y)>> rawSeries)
     {
-        var timeline = rawSeries.Values.SelectMany(x => x.Select(p => p.X)).Distinct().OrderBy(t => t).ToList();
+        detailTimeline = rawSeries.Values.SelectMany(x => x.Select(p => p.X)).Distinct().OrderBy(t => t).ToList();
 
-        if (timeline.Count == 0)
+        if (detailTimeline.Count == 0)
         {
-            detailTime = null;
+            detailTimeQuery = string.Empty;
             return;
         }
 
-        detailTime ??= timeline.Last();
+        if (string.IsNullOrWhiteSpace(detailTimeQuery))
+        {
+            detailTimeQuery = detailTimeline.Last().ToString("yyyy-MM-dd HH:mm");
+        }
     }
 
     private Task RefreshDetails()
@@ -577,7 +588,7 @@
             return;
         }
 
-        var target = detailTime ?? timeline.Last();
+        var target = ParseDetailTime(detailTimeQuery) ?? timeline.Last();
         var nearest = timeline.OrderBy(t => Math.Abs((t - target).Ticks)).First();
 
         var meterValues = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
@@ -595,5 +606,16 @@
         }
 
         detailSnapshot = new DetailSnapshot(nearest, meterValues, aggregate);
+        detailTimeQuery = nearest.ToString("yyyy-MM-dd HH:mm");
+    }
+
+    private static DateTime? ParseDetailTime(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+
+        var formats = new[] { "yyyy-MM-dd HH:mm", "yyyy-MM-ddTHH:mm", "dd.MM.yyyy HH:mm" };
+        return DateTime.TryParseExact(value.Trim(), formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)
+            ? parsed
+            : null;
     }
 }
