@@ -5,6 +5,35 @@
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
 
+<style>
+    .pie-windows-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(280px, 1fr));
+        gap: 10px;
+        margin-bottom: 10px;
+        align-items: stretch;
+    }
+
+    .pie-window-card {
+        min-height: 360px;
+        border: 1px solid #d6d9df;
+        background: #fafafa;
+        padding: 8px;
+    }
+
+    @media (max-width: 1500px) {
+        .pie-windows-grid { grid-template-columns: repeat(3, minmax(280px, 1fr)); }
+    }
+
+    @media (max-width: 1140px) {
+        .pie-windows-grid { grid-template-columns: repeat(2, minmax(280px, 1fr)); }
+    }
+
+    @media (max-width: 760px) {
+        .pie-windows-grid { grid-template-columns: 1fr; }
+    }
+</style>
+
 <h3>Interaktivní kalkulačka podílů</h3>
 
 <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
@@ -78,10 +107,10 @@
 
 @if (meters.Count > 0)
 {
-    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:10px; margin-bottom:10px;">
+    <div class="pie-windows-grid">
         @foreach (var window in windows)
         {
-            <div @key="window.Id" style="height:380px; border:1px solid #d6d9df; background:#fafafa; padding:8px;">
+            <div @key="window.Id" class="pie-window-card">
                 <canvas id="@GetCanvasId(window.Id)"></canvas>
             </div>
         }
