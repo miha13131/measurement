@@ -5,10 +5,47 @@
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
 
+<style>
+    .pie-windows-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(280px, 1fr));
+        gap: 10px;
+        margin-bottom: 10px;
+        align-items: stretch;
+    }
+
+    .pie-window-card {
+        min-height: 360px;
+        border: 1px solid #d6d9df;
+        background: #fafafa;
+        padding: 8px;
+    }
+
+    @media (max-width: 1500px) {
+        .pie-windows-grid { grid-template-columns: repeat(3, minmax(280px, 1fr)); }
+    }
+
+    @media (max-width: 1140px) {
+        .pie-windows-grid { grid-template-columns: repeat(2, minmax(280px, 1fr)); }
+    }
+
+    @media (max-width: 760px) {
+        .pie-windows-grid { grid-template-columns: 1fr; }
+    }
+</style>
+
 <h3>Interaktivní kalkulačka podílů</h3>
 
 <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
     <button @onclick="LoadAndDraw">Načíst + vykreslit</button>
+
+    <label>Načíst řádků:</label>
+    <select @onchange="OnMaxRowsChanged">
+        @foreach (var option in maxRowsOptions)
+        {
+            <option value="@option" selected="@(option == selectedMaxRows)">@option</option>
+        }
+    </select>
 
     <label>Metrika:</label>
     <select @onchange="OnMetricChanged" disabled="@(meters.Count == 0 || IsSpecialAgg)">
@@ -70,10 +107,10 @@
 
 @if (meters.Count > 0)
 {
-    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:10px; margin-bottom:10px;">
+    <div class="pie-windows-grid">
         @foreach (var window in windows)
         {
-            <div @key="window.Id" style="height:380px; border:1px solid #d6d9df; background:#fafafa; padding:8px;">
+            <div @key="window.Id" class="pie-window-card">
                 <canvas id="@GetCanvasId(window.Id)"></canvas>
             </div>
         }
@@ -194,8 +231,11 @@
         new("balance_pq", "Bilance užitečného vs. parazitního výkonu")
     ];
 
+    private readonly List<int> maxRowsOptions = [500, 2000, 5000, 10000, 20000];
+
     private string selectedMetric = "P_avg_3P";
     private string selectedAgg = "sum";
+    private int selectedMaxRows = 5000;
     private string monitoredSource = "EMI1";
     private string status = "Čekání…";
 
@@ -212,6 +252,16 @@
 
     private bool IsSpecialAgg => selectedAgg == "balance_pq";
     private IEnumerable<string> AvailableSources => meters.Select(m => m.Name);
+
+    private Task OnMaxRowsChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var rows) && rows > 0)
+        {
+            selectedMaxRows = rows;
+        }
+
+        return Task.CompletedTask;
+    }
 
     private async Task LoadAndDraw()
     {
@@ -254,7 +304,7 @@
             store.Read(pack.Entry),
             pack.TimeUtc.ToLocalTime(),
             periodMs: 60000,
-            maxRows: 1000);
+            maxRows: selectedMaxRows);
 
         table.Columns.Clear();
         table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
