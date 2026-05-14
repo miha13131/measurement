@@ -10,6 +10,14 @@
 <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
     <button @onclick="LoadAndDraw">Načíst + vykreslit</button>
 
+    <label>Načíst řádků:</label>
+    <select @onchange="OnMaxRowsChanged">
+        @foreach (var option in maxRowsOptions)
+        {
+            <option value="@option" selected="@(option == selectedMaxRows)">@option</option>
+        }
+    </select>
+
     <label>Metrika:</label>
     <select @onchange="OnMetricChanged" disabled="@(meters.Count == 0 || IsSpecialAgg)">
         @foreach (var metric in metricOptions)
@@ -194,8 +202,11 @@
         new("balance_pq", "Bilance užitečného vs. parazitního výkonu")
     ];
 
+    private readonly List<int> maxRowsOptions = [500, 2000, 5000, 10000, 20000];
+
     private string selectedMetric = "P_avg_3P";
     private string selectedAgg = "sum";
+    private int selectedMaxRows = 5000;
     private string monitoredSource = "EMI1";
     private string status = "Čekání…";
 
@@ -212,6 +223,16 @@
 
     private bool IsSpecialAgg => selectedAgg == "balance_pq";
     private IEnumerable<string> AvailableSources => meters.Select(m => m.Name);
+
+    private Task OnMaxRowsChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var rows) && rows > 0)
+        {
+            selectedMaxRows = rows;
+        }
+
+        return Task.CompletedTask;
+    }
 
     private async Task LoadAndDraw()
     {
@@ -254,7 +275,7 @@
             store.Read(pack.Entry),
             pack.TimeUtc.ToLocalTime(),
             periodMs: 60000,
-            maxRows: 1000);
+            maxRows: selectedMaxRows);
 
         table.Columns.Clear();
         table.Columns.AddRange(columns.Take(table.Rows.FirstOrDefault()?.Length ?? 0));
