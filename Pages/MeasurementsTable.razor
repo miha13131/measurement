@@ -3,7 +3,7 @@
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
 @inject HttpClient Http
-@inject DeviceMeasurementsApp.Services.UserCeaStore UserCeaStore
+@inject IJSRuntime JS
 
 <h3>Tabulka měření</h3>
 
@@ -112,10 +112,23 @@
 
     protected override async Task OnInitializedAsync()
     {
-        var source = await UserCeaStore.LoadPreferredAsync(Http);
-        store = source.Store;
-        selectedFileName = source.SourceName;
-        status = $"Automaticky načten dataset: {source.SourceName}.";
+        var localBase64 = await JS.InvokeAsync<string?>("localStorage.getItem", "measurement.lastUploaded.base64");
+        var localName = await JS.InvokeAsync<string?>("localStorage.getItem", "measurement.lastUploaded.name");
+
+        if (!string.IsNullOrWhiteSpace(localBase64))
+        {
+            var bytes = Convert.FromBase64String(localBase64);
+            store = CeaZipStore.FromBytes(bytes);
+            selectedFileName = string.IsNullOrWhiteSpace(localName) ? "saved-data.cea" : localName;
+            status = $"Automaticky načten dataset: sample-data/{selectedFileName} (z lokálního úložiště).";
+        }
+        else
+        {
+            store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+            selectedFileName = "SMY134aEMIx.cea";
+            status = "Automaticky načten dataset: sample-data/SMY134aEMIx.cea.";
+        }
+
         RefreshSelections();
     }
 
@@ -132,10 +145,11 @@
 
             var bytes = ms.ToArray();
             store = CeaZipStore.FromBytes(bytes);
-            await UserCeaStore.SaveAsync(bytes, file.Name);
+            await JS.InvokeVoidAsync("localStorage.setItem", "measurement.lastUploaded.base64", Convert.ToBase64String(bytes));
+            await JS.InvokeVoidAsync("localStorage.setItem", "measurement.lastUploaded.name", file.Name);
             table = null;
 
-            status = $"Soubor načten: {file.Name}. Byl uložen jako aktivní dataset místo sample-data.";
+            status = $"Soubor načten: {file.Name}. Uložen jako sample-data/{file.Name} (lokálně v prohlížeči).";
             RefreshSelections();
         }
         catch (Exception ex)
@@ -149,11 +163,24 @@
     {
         try
         {
-            var source = await UserCeaStore.LoadPreferredAsync(Http);
-            store = source.Store;
+            var localBase64 = await JS.InvokeAsync<string?>("localStorage.getItem", "measurement.lastUploaded.base64");
+            var localName = await JS.InvokeAsync<string?>("localStorage.getItem", "measurement.lastUploaded.name");
+
+            if (!string.IsNullOrWhiteSpace(localBase64))
+            {
+                var bytes = Convert.FromBase64String(localBase64);
+                store = CeaZipStore.FromBytes(bytes);
+                selectedFileName = string.IsNullOrWhiteSpace(localName) ? "saved-data.cea" : localName;
+                status = $"Načten dataset: sample-data/{selectedFileName} (z lokálního úložiště).";
+            }
+            else
+            {
+                store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+                selectedFileName = "SMY134aEMIx.cea";
+                status = "Načten dataset: sample-data/SMY134aEMIx.cea.";
+            }
+
             table = null;
-            selectedFileName = source.SourceName;
-            status = $"Načten dataset: {source.SourceName}.";
             RefreshSelections();
         }
         catch (Exception ex)
