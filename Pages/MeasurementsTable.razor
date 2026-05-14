@@ -8,6 +8,7 @@
 <h3>Tabulka měření</h3>
 
 <p>Nahrajte soubor <code>.cea</code>, vyberte záznam / archiv / balíček a zobrazte data v tabulce.</p>
+<p><small>Pozn.: WebAssembly aplikace nemůže za běhu zapisovat do fyzické složky <code>wwwroot/sample-data</code>. Upload je proto uložen jen v prohlížeči.</small></p>
 
 <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
     <InputFile id="ceaFileInput"
@@ -120,7 +121,7 @@
             var bytes = Convert.FromBase64String(localBase64);
             store = CeaZipStore.FromBytes(bytes);
             selectedFileName = string.IsNullOrWhiteSpace(localName) ? "saved-data.cea" : localName;
-            status = $"Automaticky načten dataset: sample-data/{selectedFileName} (z lokálního úložiště).";
+            status = $"Automaticky načten uložený dataset: {selectedFileName} (lokální úložiště prohlížeče).";
         }
         else
         {
@@ -149,7 +150,7 @@
             await JS.InvokeVoidAsync("localStorage.setItem", "measurement.lastUploaded.name", file.Name);
             table = null;
 
-            status = $"Soubor načten: {file.Name}. Uložen jako sample-data/{file.Name} (lokálně v prohlížeči).";
+            status = $"Soubor načten: {file.Name}. Uložen v lokálním úložišti prohlížeče (ne do fyzické složky serveru).";
             RefreshSelections();
         }
         catch (Exception ex)
@@ -171,7 +172,7 @@
                 var bytes = Convert.FromBase64String(localBase64);
                 store = CeaZipStore.FromBytes(bytes);
                 selectedFileName = string.IsNullOrWhiteSpace(localName) ? "saved-data.cea" : localName;
-                status = $"Načten dataset: sample-data/{selectedFileName} (z lokálního úložiště).";
+                status = $"Načten uložený dataset: {selectedFileName} (lokální úložiště prohlížeče).";
             }
             else
             {
