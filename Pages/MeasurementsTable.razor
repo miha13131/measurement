@@ -3,6 +3,7 @@
 @using DeviceMeasurementsApp.Models
 @using DeviceMeasurementsApp.Services
 @inject HttpClient Http
+@inject DeviceMeasurementsApp.Services.UserCeaStore UserCeaStore
 
 <h3>Tabulka měření</h3>
 
@@ -109,6 +110,15 @@
     private string SelectedRecordName =>
         records.FirstOrDefault(x => x.Id == selectedRecordId)?.Name ?? $"Objekt {selectedRecordId}";
 
+    protected override async Task OnInitializedAsync()
+    {
+        var source = await UserCeaStore.LoadPreferredAsync(Http);
+        store = source.Store;
+        selectedFileName = source.SourceName;
+        status = $"Automaticky načten dataset: {source.SourceName}.";
+        RefreshSelections();
+    }
+
     private async Task OnFileSelected(InputFileChangeEventArgs e)
     {
         try
@@ -120,10 +130,12 @@
             using var ms = new MemoryStream();
             await stream.CopyToAsync(ms);
 
-            store = CeaZipStore.FromBytes(ms.ToArray());
+            var bytes = ms.ToArray();
+            store = CeaZipStore.FromBytes(bytes);
+            await UserCeaStore.SaveAsync(bytes, file.Name);
             table = null;
 
-            status = $"Soubor načten: {file.Name}.";
+            status = $"Soubor načten: {file.Name}. Byl uložen jako aktivní dataset místo sample-data.";
             RefreshSelections();
         }
         catch (Exception ex)
@@ -137,10 +149,11 @@
     {
         try
         {
-            store = await CeaZipStore.LoadAsync(Http, "sample-data/SMY134aEMIx.cea");
+            var source = await UserCeaStore.LoadPreferredAsync(Http);
+            store = source.Store;
             table = null;
-            selectedFileName = "Ukázkový soubor";
-            status = "Ukázkový soubor byl načten.";
+            selectedFileName = source.SourceName;
+            status = $"Načten dataset: {source.SourceName}.";
             RefreshSelections();
         }
         catch (Exception ex)
